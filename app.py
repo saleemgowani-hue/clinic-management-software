@@ -162,6 +162,16 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    try:
+        c.execute("ALTER TABLE fee ADD COLUMN center_id INTEGER")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE appointment ADD COLUMN center_id INTEGER")
+    except sqlite3.OperationalError:
+        pass
+
     # Default Main Center
     c.execute("SELECT * FROM center WHERE center_code='CTR001'")
     if not c.fetchone():
@@ -223,9 +233,16 @@ def get_patients_dropdown():
 
 def get_centers_dropdown():
     conn = get_db()
-    df = pd.read_sql("SELECT id, center_code, name FROM center ORDER BY name", conn)
+    df = pd.read_sql("SELECT id, center_code, name, city FROM center ORDER BY city, name", conn)
     conn.close()
-    return {row["id"]: f"{row['name']} ({row['center_code']})" for _, row in df.iterrows()}
+    return {row["id"]: f"{row['name']} - {row['city']} ({row['center_code']})" for _, row in df.iterrows()}
+
+
+def get_unique_cities():
+    conn = get_db()
+    cities = [r[0] for r in conn.execute("SELECT DISTINCT city FROM center WHERE city IS NOT NULL AND city != '' ORDER BY city").fetchall()]
+    conn.close()
+    return ["All Cities"] + cities
 
 
 # -----------------------------------------------------------------------------
@@ -236,6 +253,7 @@ if "logged_in" not in st.session_state:
     st.session_state["user_id"] = None
     st.session_state["username"] = ""
     st.session_state["role"] = ""
+    st.session_state["center_id"] = None
 
 if not st.session_state["logged_in"]:
     st.title("🏥 SN Clinic Management System")
@@ -263,6 +281,7 @@ if not st.session_state["logged_in"]:
                     st.session_state["user_id"] = user["id"]
                     st.session_state["username"] = user["username"]
                     st.session_state["role"] = user["role"]
+                    st.session_state["center_id"] = user["center_id"]
                     st.success("Login Successful!")
                     st.rerun()
                 else:
@@ -275,6 +294,8 @@ if not st.session_state["logged_in"]:
             signup_pass = st.text_input("Choose Password *", type="password", key="su_pass")
             signup_conf = st.text_input("Confirm Password *", type="password", key="su_conf")
             signup_role = st.selectbox("Role", ["receptionist", "doctor", "admin"], key="su_role")
+            centers_map = get_centers_dropdown()
+            signup_center = st.selectbox("Select Center/Branch", options=list(centers_map.keys()), format_func=lambda x: centers_map[x], key="su_center") if centers_map else None
 
             if st.button("Sign Up", use_container_width=True, key="signup_btn"):
                 if not signup_user or not signup_pass:
@@ -285,8 +306,8 @@ if not st.session_state["logged_in"]:
                     conn = get_db()
                     try:
                         conn.execute(
-                            "INSERT INTO user (username, password_hash, role) VALUES (?, ?, ?)",
-                            (signup_user, hash_pass(signup_pass), signup_role),
+                            "INSERT INTO user (username, password_hash, role, center_id) VALUES (?, ?, ?, ?)",
+                            (signup_user, hash_pass(signup_pass), signup_role, signup_center),
                         )
                         conn.commit()
                         st.success(f"Account for '{signup_user}' created successfully! You can now login.")
@@ -299,10 +320,17 @@ if not st.session_state["logged_in"]:
 
 
 # -----------------------------------------------------------------------------
-# 5. SIDEBAR NAVIGATION
+# 5. SIDEBAR NAVIGATION & CITY FILTER
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏥 SN Clinic")
 st.sidebar.write(f"Logged in: **{st.session_state['username']}** (`{st.session_state['role']}`)")
+
+# CITY FILTER FOR ADMIN
+selected_city = "All Cities"
+if st.session_state["role"] == "admin":
+    all_cities = get_unique_cities()
+    selected_city = st.sidebar.selectbox("🌆 Filter by City / Branch", options=all_cities)
+    st.sidebar.markdown("---")
 
 menu = [
     "Dashboard",
@@ -330,32 +358,32 @@ if st.sidebar.button("🔴 Logout", use_container_width=True):
 conn = get_db()
 today_str = date.today().isoformat()
 
+# Helper for SQL filtering by City
+city_where = ""
+city_params = []
+if selected_city != "All Cities":
+    city_where = " WHERE c.city = ? "
+    city_params = [selected_city]
+
 # -----------------------------------------------------------------------------
 # MODULE 1: DASHBOARD
 # -----------------------------------------------------------------------------
 if choice == "Dashboard":
-    st.title("📊 Clinic Overview Dashboard")
+    st.title(f"📊 Clinic Overview Dashboard {f'({selected_city})' if selected_city != 'All Cities' else ''}")
 
-    total_patients = conn.execute("SELECT COUNT(*) FROM patient").fetchone()[0]
-    new_today = conn.execute(
-        "SELECT COUNT(*) FROM patient WHERE DATE(created_at) = ?", (today_str,)
-    ).fetchone()[0]
-    appts_today = conn.execute(
-        "SELECT COUNT(*) FROM appointment WHERE appt_date = ?", (today_str,)
-    ).fetchone()[0]
-    fees_today = (
-        conn.execute(
-            "SELECT SUM(total) FROM fee WHERE DATE(paid_on) = ?", (today_str,)
-        ).fetchone()[0]
-        or 0
-    )
-    low_stock = conn.execute(
-        "SELECT COUNT(*) FROM medicine WHERE stock <= low_stock_alert"
-    ).fetchone()[0]
-    followups_due = conn.execute(
-        "SELECT COUNT(*) FROM consultation WHERE next_visit IS NOT NULL AND next_visit <= ?",
-        (today_str,),
-    ).fetchone()[0]
+    if selected_city == "All Cities":
+        total_patients = conn.execute("SELECT COUNT(*) FROM patient").fetchone()[0]
+        new_today = conn.execute("SELECT COUNT(*) FROM patient WHERE DATE(created_at) = ?", (today_str,)).fetchone()[0]
+        appts_today = conn.execute("SELECT COUNT(*) FROM appointment WHERE appt_date = ?", (today_str,)).fetchone()[0]
+        fees_today = conn.execute("SELECT SUM(total) FROM fee WHERE DATE(paid_on) = ?", (today_str,)).fetchone()[0] or 0
+    else:
+        total_patients = conn.execute("SELECT COUNT(*) FROM patient p JOIN center c ON p.center_id=c.id WHERE c.city=?", (selected_city,)).fetchone()[0]
+        new_today = conn.execute("SELECT COUNT(*) FROM patient p JOIN center c ON p.center_id=c.id WHERE DATE(p.created_at) = ? AND c.city=?", (today_str, selected_city)).fetchone()[0]
+        appts_today = conn.execute("SELECT COUNT(*) FROM appointment a JOIN patient p ON a.patient_id=p.id JOIN center c ON p.center_id=c.id WHERE a.appt_date = ? AND c.city=?", (today_str, selected_city)).fetchone()[0]
+        fees_today = conn.execute("SELECT SUM(f.total) FROM fee f JOIN patient p ON f.patient_id=p.id JOIN center c ON p.center_id=c.id WHERE DATE(f.paid_on) = ? AND c.city=?", (today_str, selected_city)).fetchone()[0] or 0
+
+    low_stock = conn.execute("SELECT COUNT(*) FROM medicine WHERE stock <= low_stock_alert").fetchone()[0]
+    followups_due = conn.execute("SELECT COUNT(*) FROM consultation WHERE next_visit IS NOT NULL AND next_visit <= ?", (today_str,)).fetchone()[0]
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Patients", total_patients, f"+{new_today} Today")
@@ -368,13 +396,19 @@ if choice == "Dashboard":
 
     st.markdown("---")
     st.subheader("📋 Today's Appointments")
-    appts_df = pd.read_sql(
-        """SELECT a.id, p.patient_code, p.name as patient_name, a.doctor_name, a.appt_time, a.status 
-           FROM appointment a LEFT JOIN patient p ON a.patient_id = p.id 
-           WHERE a.appt_date = ? ORDER BY a.id DESC""",
-        conn,
-        params=[today_str],
-    )
+    
+    appt_query = """SELECT a.id, p.patient_code, p.name as patient_name, c.city, c.name as center_name, a.doctor_name, a.appt_time, a.status 
+                   FROM appointment a 
+                   LEFT JOIN patient p ON a.patient_id = p.id 
+                   LEFT JOIN center c ON p.center_id = c.id 
+                   WHERE a.appt_date = ?"""
+    params = [today_str]
+    if selected_city != "All Cities":
+        appt_query += " AND c.city = ?"
+        params.append(selected_city)
+    appt_query += " ORDER BY a.id DESC"
+
+    appts_df = pd.read_sql(appt_query, conn, params=params)
     if not appts_df.empty:
         st.dataframe(appts_df, use_container_width=True)
     else:
@@ -390,12 +424,19 @@ elif choice == "Patients":
 
     with t1:
         q = st.text_input("🔍 Search Patient by Name, Mobile or Code", "")
-        query = "SELECT * FROM patient"
+        query = """SELECT p.id, p.patient_code, p.name, p.guardian_name, p.age, p.gender, p.mobile, p.address, c.name as center_name, c.city 
+                   FROM patient p LEFT JOIN center c ON p.center_id=c.id WHERE 1=1"""
         params = []
+
+        if selected_city != "All Cities":
+            query += " AND c.city = ?"
+            params.append(selected_city)
+
         if q:
-            query += " WHERE name LIKE ? OR mobile LIKE ? OR patient_code LIKE ?"
-            params = [f"%{q}%", f"%{q}%", f"%{q}%"]
-        query += " ORDER BY id DESC"
+            query += " AND (p.name LIKE ? OR p.mobile LIKE ? OR p.patient_code LIKE ?)"
+            params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+
+        query += " ORDER BY p.id DESC"
 
         df = pd.read_sql(query, conn, params=params)
         st.dataframe(df, use_container_width=True)
@@ -445,7 +486,7 @@ elif choice == "Patients":
             gender = col2.selectbox("Gender", ["Male", "Female", "Other"])
             mobile = st.text_input("Mobile Number")
             address = st.text_area("Address")
-            selected_ctr = st.selectbox("Assign Center", options=list(centers_map.keys()), format_func=lambda x: centers_map[x]) if centers_map else None
+            selected_ctr = st.selectbox("Assign Center / Branch", options=list(centers_map.keys()), format_func=lambda x: centers_map[x]) if centers_map else None
 
             if st.form_submit_button("Register Patient"):
                 if name.strip():
@@ -470,11 +511,17 @@ elif choice == "Appointments":
     t1, t2 = st.tabs(["📋 All Appointments", "➕ Book Appointment"])
 
     with t1:
-        appts_df = pd.read_sql(
-            """SELECT a.id, p.patient_code, p.name as patient_name, a.doctor_name, a.appt_date, a.appt_time, a.status 
-               FROM appointment a LEFT JOIN patient p ON a.patient_id = p.id ORDER BY a.appt_date DESC, a.id DESC""",
-            conn,
-        )
+        query = """SELECT a.id, p.patient_code, p.name as patient_name, c.name as center_name, c.city, a.doctor_name, a.appt_date, a.appt_time, a.status 
+                   FROM appointment a 
+                   LEFT JOIN patient p ON a.patient_id = p.id 
+                   LEFT JOIN center c ON p.center_id = c.id WHERE 1=1"""
+        params = []
+        if selected_city != "All Cities":
+            query += " AND c.city = ?"
+            params.append(selected_city)
+        query += " ORDER BY a.appt_date DESC, a.id DESC"
+
+        appts_df = pd.read_sql(query, conn, params=params)
         st.dataframe(appts_df, use_container_width=True)
 
         if not appts_df.empty:
@@ -572,11 +619,17 @@ elif choice == "Fees & Billing":
     t1, t2 = st.tabs(["📜 Collection Records", "🧾 Add Fee / Invoice"])
 
     with t1:
-        fees_df = pd.read_sql(
-            """SELECT f.id, f.paid_on, p.patient_code, p.name as patient_name, f.consultation_fee, f.medicine_fee, f.discount, f.total, f.payment_mode 
-               FROM fee f LEFT JOIN patient p ON f.patient_id = p.id ORDER BY f.id DESC""",
-            conn,
-        )
+        query = """SELECT f.id, f.paid_on, p.patient_code, p.name as patient_name, c.name as center_name, c.city, f.consultation_fee, f.medicine_fee, f.discount, f.total, f.payment_mode 
+                   FROM fee f 
+                   LEFT JOIN patient p ON f.patient_id = p.id 
+                   LEFT JOIN center c ON p.center_id = c.id WHERE 1=1"""
+        params = []
+        if selected_city != "All Cities":
+            query += " AND c.city = ?"
+            params.append(selected_city)
+        query += " ORDER BY f.id DESC"
+
+        fees_df = pd.read_sql(query, conn, params=params)
         st.dataframe(fees_df, use_container_width=True)
 
     with t2:
@@ -640,7 +693,15 @@ elif choice == "Staff Directory":
     t1, t2 = st.tabs(["👥 Staff Directory", "➕ Add Staff Member"])
 
     with t1:
-        staff_df = pd.read_sql("SELECT * FROM staff ORDER BY id DESC", conn)
+        query = """SELECT s.id, s.employee_code, s.name, s.designation, s.mobile, s.city as staff_city, c.name as center_name, c.city as center_city, s.joining_date, s.salary, s.status 
+                   FROM staff s LEFT JOIN center c ON s.center_id=c.id WHERE 1=1"""
+        params = []
+        if selected_city != "All Cities":
+            query += " AND (c.city = ? OR s.city = ?)"
+            params.extend([selected_city, selected_city])
+        query += " ORDER BY s.id DESC"
+
+        staff_df = pd.read_sql(query, conn, params=params)
         st.dataframe(staff_df, use_container_width=True)
 
     with t2:
@@ -657,7 +718,7 @@ elif choice == "Staff Directory":
             jdate = col3.date_input("Joining Date", date.today())
             salary = col4.number_input("Salary (₹)", min_value=0.0, value=0.0)
             status = st.selectbox("Status", ["Active", "Inactive"])
-            selected_ctr = st.selectbox("Assign Center", options=list(centers_map.keys()), format_func=lambda x: centers_map[x]) if centers_map else None
+            selected_ctr = st.selectbox("Assign Center / Branch", options=list(centers_map.keys()), format_func=lambda x: centers_map[x]) if centers_map else None
 
             if st.form_submit_button("Register Staff"):
                 if sname.strip():
@@ -753,7 +814,7 @@ elif choice == "Center Management":
         if not centers_df.empty:
             st.markdown("---")
             st.subheader("🗑️ Delete Center")
-            c_options = {row["id"]: f"{row['name']} ({row['center_code']})" for _, row in centers_df.iterrows()}
+            c_options = {row["id"]: f"{row['name']} ({row['center_code']}) - {row['city']}" for _, row in centers_df.iterrows()}
             cid_del = st.selectbox("Select Center to Delete", options=list(c_options.keys()), format_func=lambda x: c_options[x])
 
             if st.button("Delete Selected Center"):
@@ -766,11 +827,11 @@ elif choice == "Center Management":
         with st.form("add_center_form"):
             st.write(f"**New Center Code:** `{next_center_code()}`")
             cname = st.text_input("Center Name *").strip()
-            city = st.text_input("City")
+            city = st.text_input("City *").strip()
             address = st.text_area("Address")
 
             if st.form_submit_button("Add Center"):
-                if cname:
+                if cname and city:
                     ccode = next_center_code()
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     try:
@@ -779,12 +840,12 @@ elif choice == "Center Management":
                             (ccode, cname, city, address, now),
                         )
                         conn.commit()
-                        st.success(f"Center '{cname}' added successfully with Code: {ccode}")
+                        st.success(f"Center '{cname}' in '{city}' added successfully!")
                         st.rerun()
                     except sqlite3.IntegrityError:
                         st.error("Center Code already exists.")
                 else:
-                    st.error("Center Name is required!")
+                    st.error("Center Name and City are required!")
 
 # -----------------------------------------------------------------------------
 # MODULE 10: REPORTS & ANALYTICS
@@ -806,8 +867,16 @@ elif choice == "Reports & Analytics":
         p_start = col1.date_input("Start Date", value=date.today(), key="p_start")
         p_end = col2.date_input("End Date", value=date.today(), key="p_end")
 
-        p_query = "SELECT patient_code, name, guardian_name, age, gender, mobile, address, created_at FROM patient WHERE DATE(created_at) >= ? AND DATE(created_at) <= ? ORDER BY id DESC"
-        p_df = pd.read_sql(p_query, conn, params=[str(p_start), str(p_end)])
+        p_query = """SELECT p.patient_code, p.name, p.guardian_name, p.age, p.gender, p.mobile, c.name as center_name, c.city, p.created_at 
+                   FROM patient p LEFT JOIN center c ON p.center_id=c.id 
+                   WHERE DATE(p.created_at) >= ? AND DATE(p.created_at) <= ?"""
+        params = [str(p_start), str(p_end)]
+        if selected_city != "All Cities":
+            p_query += " AND c.city = ?"
+            params.append(selected_city)
+        p_query += " ORDER BY p.id DESC"
+
+        p_df = pd.read_sql(p_query, conn, params=params)
 
         st.dataframe(p_df, use_container_width=True)
         if not p_df.empty:
@@ -820,10 +889,18 @@ elif choice == "Reports & Analytics":
         f_start = col1.date_input("Start Date", value=date.today(), key="f_start")
         f_end = col2.date_input("End Date", value=date.today(), key="f_end")
 
-        fee_query = """SELECT f.paid_on, p.patient_code, p.name as patient_name, f.consultation_fee, f.medicine_fee, f.discount, f.total, f.payment_mode 
-                       FROM fee f LEFT JOIN patient p ON f.patient_id=p.id 
-                       WHERE DATE(f.paid_on) >= ? AND DATE(f.paid_on) <= ? ORDER BY f.id DESC"""
-        fees_data = pd.read_sql(fee_query, conn, params=[str(f_start), str(f_end)])
+        fee_query = """SELECT f.paid_on, p.patient_code, p.name as patient_name, c.name as center_name, c.city, f.consultation_fee, f.medicine_fee, f.discount, f.total, f.payment_mode 
+                       FROM fee f 
+                       LEFT JOIN patient p ON f.patient_id=p.id 
+                       LEFT JOIN center c ON p.center_id=c.id 
+                       WHERE DATE(f.paid_on) >= ? AND DATE(f.paid_on) <= ?"""
+        params = [str(f_start), str(f_end)]
+        if selected_city != "All Cities":
+            fee_query += " AND c.city = ?"
+            params.append(selected_city)
+        fee_query += " ORDER BY f.id DESC"
+
+        fees_data = pd.read_sql(fee_query, conn, params=params)
 
         st.dataframe(fees_data, use_container_width=True)
         if not fees_data.empty:
@@ -836,10 +913,18 @@ elif choice == "Reports & Analytics":
         att_sel_date = st.date_input("Select Date", value=date.today(), key="att_daily_date")
 
         try:
-            daily_att_query = """SELECT s.employee_code, s.name, s.designation, a.status, a.att_date 
-                                 FROM attendance a JOIN staff s ON a.staff_id=s.id 
-                                 WHERE a.att_date = ? ORDER BY s.name"""
-            d_att_df = pd.read_sql(daily_att_query, conn, params=[str(att_sel_date)])
+            daily_att_query = """SELECT s.employee_code, s.name, s.designation, c.name as center_name, c.city, a.status, a.att_date 
+                                 FROM attendance a 
+                                 JOIN staff s ON a.staff_id=s.id 
+                                 LEFT JOIN center c ON s.center_id=c.id 
+                                 WHERE a.att_date = ?"""
+            params = [str(att_sel_date)]
+            if selected_city != "All Cities":
+                daily_att_query += " AND c.city = ?"
+                params.append(selected_city)
+            daily_att_query += " ORDER BY s.name"
+
+            d_att_df = pd.read_sql(daily_att_query, conn, params=params)
 
             if not d_att_df.empty:
                 st.dataframe(d_att_df, use_container_width=True)
@@ -891,7 +976,7 @@ elif choice == "Users Management":
         t1, t2 = st.tabs(["👥 System Users", "➕ Add System User"])
 
         with t1:
-            users_df = pd.read_sql("SELECT id, username, role FROM user", conn)
+            users_df = pd.read_sql("SELECT u.id, u.username, u.role, c.name as center_name, c.city FROM user u LEFT JOIN center c ON u.center_id=c.id", conn)
             st.dataframe(users_df, use_container_width=True)
 
             st.markdown("---")
@@ -908,11 +993,13 @@ elif choice == "Users Management":
                     st.rerun()
 
         with t2:
+            centers_map = get_centers_dropdown()
             with st.form("add_user_form"):
                 new_u = st.text_input("Username *").strip()
                 new_p = st.text_input("Password *", type="password")
                 conf_p = st.text_input("Confirm Password *", type="password")
                 role = st.selectbox("Role", ["receptionist", "doctor", "admin"])
+                u_center = st.selectbox("Assign Center / Branch", options=list(centers_map.keys()), format_func=lambda x: centers_map[x]) if centers_map else None
 
                 if st.form_submit_button("Create User"):
                     if not new_u or not new_p:
@@ -922,8 +1009,8 @@ elif choice == "Users Management":
                     else:
                         try:
                             conn.execute(
-                                "INSERT INTO user (username, password_hash, role) VALUES (?, ?, ?)",
-                                (new_u, hash_pass(new_p), role),
+                                "INSERT INTO user (username, password_hash, role, center_id) VALUES (?, ?, ?, ?)",
+                                (new_u, hash_pass(new_p), role, u_center),
                             )
                             conn.commit()
                             st.success(f"User '{new_u}' ({role}) created successfully!")
