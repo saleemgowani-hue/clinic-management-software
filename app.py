@@ -1,3 +1,13 @@
+import calendar
+import csv
+import hashlib
+import sqlite3
+from datetime import date, datetime, timedelta
+from io import StringIO
+
+import pandas as pd
+import streamlit as st  # <-- Iska hona zaroori hai
+
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIG & CUSTOM STYLING
 # -----------------------------------------------------------------------------
