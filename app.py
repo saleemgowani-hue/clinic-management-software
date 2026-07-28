@@ -151,6 +151,7 @@ def init_db():
         "ALTER TABLE patient ADD COLUMN center_id INTEGER",
         "ALTER TABLE staff ADD COLUMN status TEXT DEFAULT 'Active'",
         "ALTER TABLE staff ADD COLUMN center_id INTEGER",
+        "ALTER TABLE staff ADD COLUMN created_at TEXT",
         "ALTER TABLE user ADD COLUMN center_id INTEGER",
         "ALTER TABLE fee ADD COLUMN center_id INTEGER",
         "ALTER TABLE appointment ADD COLUMN center_id INTEGER"
@@ -291,7 +292,7 @@ if not st.session_state["logged_in"]:
                     st.session_state["logged_in"] = True
                     st.session_state["user_id"] = user["id"]
                     st.session_state["username"] = user["username"]
-                    st.session_state["role"] = user["role"]
+                    st.session_state["role"] = user["role"].lower()
                     st.session_state["center_id"] = user["center_id"] if "center_id" in user.keys() else None
                     st.success("Login Successful!")
                     st.rerun()
@@ -304,7 +305,7 @@ if not st.session_state["logged_in"]:
             signup_user = st.text_input("Choose Username *", key="su_user").strip()
             signup_pass = st.text_input("Choose Password *", type="password", key="su_pass")
             signup_conf = st.text_input("Confirm Password *", type="password", key="su_conf")
-            signup_role = st.selectbox("Role", ["receptionist", "doctor", "admin"], key="su_role")
+            signup_role = st.selectbox("Role", ["receptionist", "doctor", "hr", "admin"], key="su_role")
             centers_map = get_centers_dropdown()
             signup_center = st.selectbox("Select Center/Branch", options=list(centers_map.keys()), format_func=lambda x: centers_map[x], key="su_center") if centers_map else None
 
@@ -336,9 +337,9 @@ if not st.session_state["logged_in"]:
 st.sidebar.title("🏥 SN Clinic")
 st.sidebar.write(f"Logged in: **{st.session_state['username']}** (`{st.session_state['role']}`)")
 
-# GLOBAL CITY FILTER ONLY FOR ADMIN
+# GLOBAL CITY FILTER FOR ADMIN AND HR
 selected_city = "All Cities"
-if st.session_state["role"] == "admin":
+if st.session_state["role"] in ["admin", "hr"]:
     all_cities = get_unique_cities()
     selected_city = st.sidebar.selectbox("🌆 Filter by City / Branch", options=all_cities)
     st.sidebar.markdown("---")
@@ -752,12 +753,16 @@ elif choice == "Staff Directory":
                     ecode = next_employee_code()
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     conn.execute(
-                        "INSERT INTO staff (employee_code, name, designation, mobile, city, address, joining_date, salary, status, center_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        """INSERT INTO staff 
+                           (employee_code, name, designation, mobile, city, address, joining_date, salary, status, center_id, created_at) 
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                         (ecode, sname, desig, mobile, city, address, str(jdate), salary, status, selected_ctr, now),
                     )
                     conn.commit()
                     st.success(f"Staff '{sname}' added with ID {ecode}")
                     st.rerun()
+                else:
+                    st.error("Staff Name is required!")
 
 # -----------------------------------------------------------------------------
 # MODULE 8: DAILY ATTENDANCE
@@ -832,8 +837,8 @@ elif choice == "Daily Attendance":
 elif choice == "Center Management":
     st.title("🏢 Center / Branch Management")
 
-    if st.session_state["role"] != "admin":
-        st.error("🔒 Only Admin can access Center Management.")
+    if st.session_state["role"] not in ["admin", "hr"]:
+        st.error("🔒 Only Admin and HR can access Center Management.")
     else:
         t1, t2 = st.tabs(["📋 Center List", "➕ Add New Center"])
 
@@ -841,7 +846,7 @@ elif choice == "Center Management":
             centers_df = pd.read_sql("SELECT * FROM center ORDER BY id DESC", conn)
             st.dataframe(centers_df, use_container_width=True)
 
-            if not centers_df.empty:
+            if not centers_df.empty and st.session_state["role"] == "admin":
                 st.markdown("---")
                 st.subheader("🗑️ Delete Center")
                 c_options = {row["id"]: f"{row['name']} ({row['center_code']}) - {row['city']}" for _, row in centers_df.iterrows()}
@@ -878,13 +883,13 @@ elif choice == "Center Management":
                         st.error("Center Name and City are required!")
 
 # -----------------------------------------------------------------------------
-# MODULE 10: REPORTS & ANALYTICS (CITY FILTER ONLY FOR ADMIN)
+# MODULE 10: REPORTS & ANALYTICS (CITY FILTER FOR ADMIN AND HR)
 # -----------------------------------------------------------------------------
 elif choice == "Reports & Analytics":
     st.title("📈 Reports & Analytics Center")
 
     all_cities_list = get_unique_cities()
-    is_admin = st.session_state["role"] == "admin"
+    has_full_access = st.session_state["role"] in ["admin", "hr"]
 
     rep_tab1, rep_tab2, rep_tab3, rep_tab4 = st.tabs([
         "👨‍👩‍👧‍👦 Day-wise Patient Report", 
@@ -897,7 +902,7 @@ elif choice == "Reports & Analytics":
     with rep_tab1:
         st.subheader("👨‍👩‍👧‍👦 Day-wise Patient Registration Report")
         
-        if is_admin:
+        if has_full_access:
             c_filter_1, c_col1, c_col2 = st.columns([1.5, 1, 1])
             r1_city = c_filter_1.selectbox("🌆 Select City / Branch", options=all_cities_list, key="r1_city_select")
         else:
@@ -931,7 +936,7 @@ elif choice == "Reports & Analytics":
     with rep_tab2:
         st.subheader("💳 Day-wise Fee Collection Report")
         
-        if is_admin:
+        if has_full_access:
             c_filter_2, c_col1, c_col2 = st.columns([1.5, 1, 1])
             r2_city = c_filter_2.selectbox("🌆 Select City / Branch", options=all_cities_list, key="r2_city_select")
         else:
@@ -968,7 +973,7 @@ elif choice == "Reports & Analytics":
     with rep_tab3:
         st.subheader("📅 Daily Staff Attendance Report")
         
-        if is_admin:
+        if has_full_access:
             c_filter_3, c_col1 = st.columns([1.5, 1])
             r3_city = c_filter_3.selectbox("🌆 Select City / Branch", options=all_cities_list, key="r3_city_select")
         else:
@@ -1003,7 +1008,7 @@ elif choice == "Reports & Analytics":
     with rep_tab4:
         st.subheader("📊 Monthly Staff Attendance Summary")
         
-        if is_admin:
+        if has_full_access:
             c_filter_4, col1, col2 = st.columns([1.5, 1, 1])
             r4_city = c_filter_4.selectbox("🌆 Select City / Branch", options=all_cities_list, key="r4_city_select")
         else:
@@ -1078,7 +1083,7 @@ elif choice == "Users Management":
                 new_u = st.text_input("Username *").strip()
                 new_p = st.text_input("Password *", type="password")
                 conf_p = st.text_input("Confirm Password *", type="password")
-                role = st.selectbox("Role", ["receptionist", "doctor", "admin"])
+                role = st.selectbox("Role", ["receptionist", "doctor", "hr", "admin"])
                 u_center = st.selectbox("Assign Center / Branch", options=list(centers_map.keys()), format_func=lambda x: centers_map[x]) if centers_map else None
 
                 if st.form_submit_button("Create User"):
