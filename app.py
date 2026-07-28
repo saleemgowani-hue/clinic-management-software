@@ -391,16 +391,17 @@ if choice == "Dashboard":
             new_today = conn.execute("SELECT COUNT(*) FROM patient WHERE DATE(created_at) = ?", (today_str,)).fetchone()[0]
             appts_today = conn.execute("SELECT COUNT(*) FROM appointment WHERE appt_date = ?", (today_str,)).fetchone()[0]
             fees_today = conn.execute("SELECT SUM(total) FROM fee WHERE DATE(paid_on) = ?", (today_str,)).fetchone()[0] or 0
+            followups_due = conn.execute("SELECT COUNT(*) FROM consultation WHERE next_visit IS NOT NULL AND next_visit >= ?", (today_str,)).fetchone()[0]
         else:
             total_patients = conn.execute("SELECT COUNT(*) FROM patient p JOIN center c ON p.center_id=c.id WHERE c.city=?", (selected_city,)).fetchone()[0]
             new_today = conn.execute("SELECT COUNT(*) FROM patient p JOIN center c ON p.center_id=c.id WHERE DATE(p.created_at) = ? AND c.city=?", (today_str, selected_city)).fetchone()[0]
             appts_today = conn.execute("SELECT COUNT(*) FROM appointment a JOIN patient p ON a.patient_id=p.id JOIN center c ON p.center_id=c.id WHERE a.appt_date = ? AND c.city=?", (today_str, selected_city)).fetchone()[0]
             fees_today = conn.execute("SELECT SUM(f.total) FROM fee f JOIN patient p ON f.patient_id=p.id JOIN center c ON p.center_id=c.id WHERE DATE(f.paid_on) = ? AND c.city=?", (today_str, selected_city)).fetchone()[0] or 0
+            followups_due = conn.execute("SELECT COUNT(*) FROM consultation con JOIN patient p ON con.patient_id=p.id JOIN center c ON p.center_id=c.id WHERE con.next_visit IS NOT NULL AND con.next_visit >= ? AND c.city=?", (today_str, selected_city)).fetchone()[0]
     except Exception:
-        total_patients, new_today, appts_today, fees_today = 0, 0, 0, 0.0
+        total_patients, new_today, appts_today, fees_today, followups_due = 0, 0, 0, 0.0, 0
 
     low_stock = conn.execute("SELECT COUNT(*) FROM medicine WHERE stock <= low_stock_alert").fetchone()[0]
-    followups_due = conn.execute("SELECT COUNT(*) FROM consultation WHERE next_visit IS NOT NULL AND next_visit <= ?", (today_str,)).fetchone()[0]
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Total Patients", total_patients, f"+{new_today} Today")
@@ -409,7 +410,7 @@ if choice == "Dashboard":
 
     c4, c5, c6 = st.columns(3)
     c4.metric("Low Stock Alert", low_stock)
-    c5.metric("Follow-ups Due", followups_due)
+    c5.metric("Follow-ups Scheduled", followups_due)
 
     st.markdown("---")
     st.subheader("📋 Today's Appointments")
@@ -584,59 +585,82 @@ elif choice == "Appointments":
             st.warning("Please register a patient first.")
 
 # -----------------------------------------------------------------------------
-# MODULE 4: FOLLOW-UPS
+# MODULE 4: FOLLOW-UPS (UPDATED: SHOW TODAY AND FUTURE FOLLOW-UPS)
 # -----------------------------------------------------------------------------
 elif choice == "Follow-ups":
-    st.title("🔄 Patient Follow-ups Tracking")
+    st.title("🔄 Upcoming & Due Follow-ups Tracking")
 
-    today = date.today()
-    horizon = today + timedelta(days=7)
+    today_date = date.today().isoformat()
 
     try:
-        consults = conn.execute(
-            "SELECT c.*, p.name, p.mobile, p.patient_code FROM consultation c JOIN patient p ON c.patient_id=p.id WHERE c.next_visit IS NOT NULL ORDER BY c.visit_date DESC"
-        ).fetchall()
+        query = """SELECT c.id, c.next_visit, c.visit_date, c.symptoms, c.diagnosis, c.prescription,
+                          p.patient_code, p.name as patient_name, p.mobile, ctr.name as center_name, ctr.city
+                   FROM consultation c
+                   JOIN patient p ON c.patient_id = p.id
+                   LEFT JOIN center ctr ON p.center_id = ctr.id
+                   WHERE c.next_visit IS NOT NULL AND c.next_visit >= ?"""
+        
+        params = [today_date]
+        if selected_city != "All Cities":
+            query += " AND ctr.city = ?"
+            params.append(selected_city)
 
-        latest_per_patient = {}
-        for c in consults:
-            if c["patient_id"] not in latest_per_patient:
-                latest_per_patient[c["patient_id"]] = c
+        query += " ORDER BY c.next_visit ASC"
 
-        overdue = []
-        due_soon = []
-        for c in latest_per_patient.values():
-            nv = datetime.strptime(c["next_visit"], "%Y-%m-%d").date()
-            if nv < today:
-                overdue.append(c)
-            elif nv <= horizon:
-                due_soon.append(c)
+        followups_df = pd.read_sql(query, conn, params=params)
 
-        st.subheader("⚠️ Overdue Follow-ups")
-        if overdue:
-            o_df = pd.DataFrame([{
-                "Patient Code": x["patient_code"],
-                "Name": x["name"],
-                "Mobile": x["mobile"],
-                "Next Visit": x["next_visit"],
-                "Diagnosis": x["diagnosis"],
-            } for x in overdue])
-            st.dataframe(o_df, use_container_width=True)
+        st.subheader("📅 Scheduled Follow-up Visits (Today & Future)")
+        
+        if not followups_df.empty:
+            # Re-ordering columns for better presentation
+            followups_df = followups_df[[
+                "next_visit", "patient_code", "patient_name", "mobile", 
+                "center_name", "city", "diagnosis", "symptoms", "prescription"
+            ]]
+            followups_df.rename(columns={
+                "next_visit": "Scheduled Follow-up Date",
+                "patient_code": "Patient Code",
+                "patient_name": "Patient Name",
+                "mobile": "Mobile Number",
+                "center_name": "Center",
+                "city": "City",
+                "diagnosis": "Diagnosis",
+                "symptoms": "Symptoms",
+                "prescription": "Prescription"
+            }, inplace=True)
+
+            st.dataframe(followups_df, use_container_width=True)
+            st.download_button(
+                "📥 Download Follow-ups List (CSV)", 
+                followups_df.to_csv(index=False).encode('utf-8'), 
+                f"upcoming_followups_{today_date}.csv", 
+                "text/csv"
+            )
         else:
-            st.success("No overdue follow-ups!")
+            st.info("No upcoming follow-ups scheduled after today.")
 
-        st.subheader("📅 Due Soon (Next 7 Days)")
-        if due_soon:
-            s_df = pd.DataFrame([{
-                "Patient Code": x["patient_code"],
-                "Name": x["name"],
-                "Mobile": x["mobile"],
-                "Next Visit": x["next_visit"],
-                "Diagnosis": x["diagnosis"],
-            } for x in due_soon])
-            st.dataframe(s_df, use_container_width=True)
+        st.markdown("---")
+        st.subheader("⏳ Overdue Follow-ups (Past Dates)")
+        
+        past_query = """SELECT c.next_visit as "Scheduled Date", p.patient_code as "Patient Code", 
+                               p.name as "Patient Name", p.mobile as "Mobile", c.diagnosis as "Diagnosis"
+                        FROM consultation c
+                        JOIN patient p ON c.patient_id = p.id
+                        LEFT JOIN center ctr ON p.center_id = ctr.id
+                        WHERE c.next_visit IS NOT NULL AND c.next_visit < ?"""
+        past_params = [today_date]
+        if selected_city != "All Cities":
+            past_query += " AND ctr.city = ?"
+            past_params.append(selected_city)
+        past_query += " ORDER BY c.next_visit DESC"
+
+        past_df = pd.read_sql(past_query, conn, params=past_params)
+        if not past_df.empty:
+            st.dataframe(past_df, use_container_width=True)
         else:
-            st.info("No follow-ups due in the next 7 days.")
-    except Exception:
+            st.success("No pending past overdue follow-ups!")
+
+    except Exception as e:
         st.info("No follow-up records found.")
 
 # -----------------------------------------------------------------------------
@@ -717,7 +741,7 @@ elif choice == "Medicines Inventory":
                     st.rerun()
 
 # -----------------------------------------------------------------------------
-# MODULE 7: STAFF DIRECTORY (FIXED FOR DB SCHEMA)
+# MODULE 7: STAFF DIRECTORY
 # -----------------------------------------------------------------------------
 elif choice == "Staff Directory":
     st.title("👨‍⚕️ Staff & Employee Management")
@@ -759,15 +783,27 @@ elif choice == "Staff Directory":
                 if sname.strip():
                     ecode = next_employee_code()
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    conn.execute(
-                        """INSERT INTO staff 
-                           (employee_code, name, designation, mobile, city, address, joining_date, salary, status, center_id, created_at) 
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                        (ecode, sname, desig, mobile, city, address, str(jdate), salary, status, selected_ctr, now),
-                    )
-                    conn.commit()
-                    st.success(f"Staff '{sname}' added with ID {ecode}")
-                    st.rerun()
+                    init_db()
+                    try:
+                        conn.execute(
+                            """INSERT INTO staff 
+                               (employee_code, name, designation, mobile, city, address, joining_date, salary, status, center_id, created_at) 
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (ecode, sname, desig, mobile, city, address, str(jdate), salary, status, selected_ctr, now),
+                        )
+                        conn.commit()
+                        st.success(f"Staff '{sname}' added with ID {ecode}")
+                        st.rerun()
+                    except sqlite3.OperationalError:
+                        conn.execute(
+                            """INSERT INTO staff 
+                               (employee_code, name, designation, mobile, city, address, joining_date, salary) 
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (ecode, sname, desig, mobile, city, address, str(jdate), salary),
+                        )
+                        conn.commit()
+                        st.success(f"Staff '{sname}' added with ID {ecode}")
+                        st.rerun()
                 else:
                     st.error("Staff Name is required!")
 
