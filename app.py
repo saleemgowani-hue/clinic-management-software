@@ -176,7 +176,7 @@ def get_patients_dropdown():
 
 
 # -----------------------------------------------------------------------------
-# 4. AUTHENTICATION
+# 4. AUTHENTICATION (LOGIN & SIGN UP)
 # -----------------------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -187,28 +187,61 @@ if "logged_in" not in st.session_state:
 if not st.session_state["logged_in"]:
     st.title("🏥 SN Clinic Management System")
     col1, col2, col3 = st.columns([1, 1.5, 1])
+    
     with col2:
-        st.subheader("🔐 System Login")
-        user_input = st.text_input("Username")
-        pass_input = st.text_input("Password", type="password")
+        auth_tab1, auth_tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
 
-        if st.button("Login", use_container_width=True):
-            conn = get_db()
-            user = conn.execute(
-                "SELECT * FROM user WHERE username=? AND password_hash=?",
-                (user_input.strip(), hash_pass(pass_input)),
-            ).fetchone()
-            conn.close()
+        # TAB 1: LOGIN
+        with auth_tab1:
+            st.subheader("Login to System")
+            user_input = st.text_input("Username", key="login_user")
+            pass_input = st.text_input("Password", type="password", key="login_pass")
 
-            if user:
-                st.session_state["logged_in"] = True
-                st.session_state["user_id"] = user["id"]
-                st.session_state["username"] = user["username"]
-                st.session_state["role"] = user["role"]
-                st.success("Login Successful!")
-                st.rerun()
-            else:
-                st.error("Invalid Username or Password")
+            if st.button("Login", use_container_width=True, key="login_btn"):
+                conn = get_db()
+                user = conn.execute(
+                    "SELECT * FROM user WHERE username=? AND password_hash=?",
+                    (user_input.strip(), hash_pass(pass_input)),
+                ).fetchone()
+                conn.close()
+
+                if user:
+                    st.session_state["logged_in"] = True
+                    st.session_state["user_id"] = user["id"]
+                    st.session_state["username"] = user["username"]
+                    st.session_state["role"] = user["role"]
+                    st.success("Login Successful!")
+                    st.rerun()
+                else:
+                    st.error("Invalid Username or Password")
+
+        # TAB 2: SIGN UP
+        with auth_tab2:
+            st.subheader("Create New Account")
+            signup_user = st.text_input("Choose Username *", key="su_user").strip()
+            signup_pass = st.text_input("Choose Password *", type="password", key="su_pass")
+            signup_conf = st.text_input("Confirm Password *", type="password", key="su_conf")
+            signup_role = st.selectbox("Role", ["receptionist", "doctor"], key="su_role")
+
+            if st.button("Sign Up", use_container_width=True, key="signup_btn"):
+                if not signup_user or not signup_pass:
+                    st.error("Username and password are required!")
+                elif signup_pass != signup_conf:
+                    st.error("Passwords do not match!")
+                else:
+                    conn = get_db()
+                    try:
+                        conn.execute(
+                            "INSERT INTO user (username, password_hash, role) VALUES (?, ?, ?)",
+                            (signup_user, hash_pass(signup_pass), signup_role),
+                        )
+                        conn.commit()
+                        st.success(f"Account for '{signup_user}' created successfully! You can now login.")
+                    except sqlite3.IntegrityError:
+                        st.error("That username is already taken. Please choose another.")
+                    finally:
+                        conn.close()
+
     st.stop()
 
 
