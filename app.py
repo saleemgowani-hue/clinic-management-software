@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",  # Mobile me sidebar auto-collapse rahega
 )
 
-# Custom CSS for compact & centered forms
+# Custom CSS for compact & centered forms (Fixed Parameter Here)
 st.markdown(
     """
     <style>
@@ -20,7 +20,7 @@ st.markdown(
     }
     </style>
 """,
-    unsafe_innerHTML=True,
+    unsafe_allow_html=True,
 )
 
 
