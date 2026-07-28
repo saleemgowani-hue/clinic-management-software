@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",  # Mobile me sidebar auto-collapse rahega
 )
 
-# Custom CSS for compact & centered forms (Fixed Parameter Here)
+# Custom CSS for compact & centered login forms
 st.markdown(
     """
     <style>
@@ -132,9 +132,11 @@ def login_page():
                     conn.close()
 
 
-# 5. Main Dashboard (After Login Navigation)
+# 5. Main Dashboard (Interactive Dashboard & Navigation)
 def main_dashboard():
-    st.sidebar.title(f"Welcome, {st.session_state['username']}")
+    # Sidebar Navigation & Mobile Collapse Setup
+    st.sidebar.title("🏥 SN Clinic")
+    st.sidebar.caption(f"Logged in as: **{st.session_state['username']}**")
 
     menu = [
         "Dashboard",
@@ -147,41 +149,138 @@ def main_dashboard():
         "Users",
         "Staff",
     ]
-    choice = st.sidebar.selectbox("Navigation", menu)
+    choice = st.sidebar.selectbox("Navigation Menu", menu)
 
-    if st.sidebar.button("Logout", use_container_width=True):
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🔴 Logout", use_container_width=True):
         st.session_state["logged_in"] = False
         st.session_state["username"] = ""
         st.rerun()
 
-    # Module Sections
+    # ------------------ DASHBOARD MODULE ------------------
     if choice == "Dashboard":
-        st.title("📊 Clinic Dashboard")
-        st.write("Welcome to SN Clinic Management System!")
+        st.title("📊 Clinic Overview Dashboard")
+        st.write(
+            f"Welcome back, **{st.session_state['username']}**! Here is today's summary:"
+        )
 
+        st.markdown("---")
+
+        # 1. Key Metrics Cards
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric(
+                label="👨‍👩‍👧‍👦 Total Patients", value="128", delta="+5 Today"
+            )
+
+        with col2:
+            st.metric(
+                label="📅 Today's Appointments", value="12", delta="3 Pending"
+            )
+
+        with col3:
+            st.metric(
+                label="💳 Today's Collection",
+                value="₹14,500",
+                delta="₹2,000 Unpaid",
+            )
+
+        with col4:
+            st.metric(
+                label="💊 Low Stock Medicines",
+                value="4",
+                delta="-2 Items",
+                delta_color="inverse",
+            )
+
+        st.markdown("---")
+
+        # 2. Quick Action Buttons
+        st.subheader("⚡ Quick Actions")
+        q_col1, q_col2, q_col3 = st.columns(3)
+
+        with q_col1:
+            if st.button("➕ Register New Patient", use_container_width=True):
+                st.info(
+                    "Navigate to 'Patients' tab from sidebar to add record."
+                )
+
+        with q_col2:
+            if st.button("📅 Schedule Appointment", use_container_width=True):
+                st.info(
+                    "Navigate to 'Appointments' tab to book a time slot."
+                )
+
+        with q_col3:
+            if st.button("🧾 Generate Fee Bill", use_container_width=True):
+                st.info("Navigate to 'Fees' tab to create an invoice.")
+
+        st.markdown("---")
+
+        # 3. Recent Appointments Table Placeholder
+        st.subheader("📋 Today's Appointment Schedule")
+
+        sample_data = [
+            {
+                "Time": "10:00 AM",
+                "Patient Name": "Ramesh Kumar",
+                "Doctor": "Dr. Sharma",
+                "Status": "Completed",
+            },
+            {
+                "Time": "10:30 AM",
+                "Patient Name": "Priya Singh",
+                "Doctor": "Dr. Sharma",
+                "Status": "In Consultation",
+            },
+            {
+                "Time": "11:15 AM",
+                "Patient Name": "Amit Verma",
+                "Doctor": "Dr. Patel",
+                "Status": "Waiting",
+            },
+            {
+                "Time": "12:00 PM",
+                "Patient Name": "Suresh Patel",
+                "Doctor": "Dr. Sharma",
+                "Status": "Scheduled",
+            },
+        ]
+        st.dataframe(sample_data, use_container_width=True)
+
+    # ------------------ OTHER MODULES ------------------
     elif choice == "Patients":
         st.title("👨‍👩‍👧‍👦 Patient Management")
+        st.write("Patient Records and Registration form will go here.")
 
     elif choice == "Appointments":
         st.title("📅 Appointments Management")
+        st.write("Schedule and manage patient slots here.")
 
     elif choice == "Fees":
         st.title("💳 Billing & Fee Management")
+        st.write("Generate invoices and track payments here.")
 
     elif choice == "Medicines":
         st.title("💊 Medicine Inventory")
+        st.write("Manage pharmacy stock and medicines here.")
 
     elif choice == "Reports":
         st.title("📈 Reports & Analytics")
+        st.write("View clinic revenue and patient reports here.")
 
     elif choice == "Followups":
         st.title("🔄 Follow-up Tracking")
+        st.write("Track upcoming follow-up appointments here.")
 
     elif choice == "Users":
         st.title("⚙️ User Access Management")
+        st.write("Manage user roles and passwords here.")
 
     elif choice == "Staff":
         st.title("👨‍⚕️ Staff Directory")
+        st.write("Manage doctors and clinic staff details here.")
 
 
 # Main Application Control
