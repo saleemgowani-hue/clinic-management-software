@@ -431,7 +431,7 @@ if choice == "Dashboard":
         st.info("No appointments found.")
 
 # -----------------------------------------------------------------------------
-# MODULE 2: PATIENTS (WITH EDIT FUNCTIONALITY)
+# MODULE 2: PATIENTS
 # -----------------------------------------------------------------------------
 elif choice == "Patients":
     st.title("👨‍👩‍👧‍👦 Patient Management")
@@ -544,8 +544,7 @@ elif choice == "Patients":
                     c_idx = ctr_keys.index(p_data["center_id"]) if p_data["center_id"] in ctr_keys else 0
                     e_ctr = st.selectbox("Assign Center / Branch", options=ctr_keys, format_func=lambda x: centers_map[x], index=c_idx) if centers_map else None
 
-                    col_u1, col_u2 = st.columns([1, 1])
-                    if col_u1.form_submit_button("Update Patient Info"):
+                    if st.form_submit_button("Update Patient Info"):
                         conn.execute(
                             "UPDATE patient SET name=?, guardian_name=?, age=?, gender=?, mobile=?, address=?, center_id=? WHERE id=?",
                             (e_name, e_gname, e_age if e_age > 0 else None, e_gender, e_mobile, e_address, e_ctr, edit_pid),
@@ -555,7 +554,7 @@ elif choice == "Patients":
                         st.rerun()
 
 # -----------------------------------------------------------------------------
-# MODULE 3: APPOINTMENTS (EDIT ADDED, DEFAULT DR. SHARMA REMOVED)
+# MODULE 3: APPOINTMENTS
 # -----------------------------------------------------------------------------
 elif choice == "Appointments":
     st.title("📅 Appointments Management")
@@ -596,7 +595,7 @@ elif choice == "Appointments":
         if patients_map:
             with st.form("book_appt"):
                 pid = st.selectbox("Select Patient", options=list(patients_map.keys()), format_func=lambda x: patients_map[x])
-                doc = st.text_input("Doctor Name", "") # Default Dr Sharma REMOVED
+                doc = st.text_input("Doctor Name", "")
                 col1, col2 = st.columns(2)
                 adate = col1.date_input("Appointment Date", date.today())
                 atime = col2.time_input("Appointment Time")
@@ -719,7 +718,7 @@ elif choice == "Follow-ups":
         st.info("No follow-up records found.")
 
 # -----------------------------------------------------------------------------
-# MODULE 5: FEES & BILLING (WITH EDIT & DELETE OPTIONS)
+# MODULE 5: FEES & BILLING
 # -----------------------------------------------------------------------------
 elif choice == "Fees & Billing":
     st.title("💳 Fees & Billing Collection")
@@ -803,12 +802,12 @@ elif choice == "Fees & Billing":
                     st.rerun()
 
 # -----------------------------------------------------------------------------
-# MODULE 6: MEDICINES INVENTORY
+# MODULE 6: MEDICINES INVENTORY (WITH EDIT FUNCTIONALITY ADDED)
 # -----------------------------------------------------------------------------
 elif choice == "Medicines Inventory":
     st.title("💊 Medicines Inventory Management")
 
-    t1, t2 = st.tabs(["📦 Stock List", "➕ Add New Medicine"])
+    t1, t2, t3 = st.tabs(["📦 Stock List", "➕ Add New Medicine", "✏️ Edit Medicine Details"])
 
     with t1:
         meds_df = pd.read_sql("SELECT * FROM medicine ORDER BY name", conn)
@@ -832,8 +831,41 @@ elif choice == "Medicines Inventory":
                     st.success(f"Medicine '{name}' added!")
                     st.rerun()
 
+    with t3:
+        st.subheader("✏️ Edit Medicine / Update Stock")
+        all_meds = conn.execute("SELECT id, name, stock FROM medicine ORDER BY name").fetchall()
+        if all_meds:
+            med_dict = {m["id"]: f"{m['name']} (Current Stock: {m['stock']})" for m in all_meds}
+            sel_mid = st.selectbox("Select Medicine to Edit", options=list(med_dict.keys()), format_func=lambda x: med_dict[x])
+            m_data = conn.execute("SELECT * FROM medicine WHERE id=?", (sel_mid,)).fetchone()
+
+            if m_data:
+                with st.form("edit_med_form"):
+                    em_name = st.text_input("Medicine Name *", value=m_data["name"])
+                    mc1, mc2, mc3 = st.columns(3)
+                    em_stock = mc1.number_input("Current Stock", min_value=0, value=int(m_data["stock"] or 0))
+                    em_alert = mc2.number_input("Low Stock Alert", min_value=1, value=int(m_data["low_stock_alert"] or 10))
+                    em_price = mc3.number_input("Unit Price (₹)", min_value=0.0, value=float(m_data["unit_price"] or 0.0))
+
+                    col_m1, col_m2 = st.columns([1, 1])
+                    if col_m1.form_submit_button("Update Medicine Info"):
+                        conn.execute(
+                            "UPDATE medicine SET name=?, stock=?, low_stock_alert=?, unit_price=? WHERE id=?",
+                            (em_name, em_stock, em_alert, em_price, sel_mid),
+                        )
+                        conn.commit()
+                        st.success("Medicine details updated successfully!")
+                        st.rerun()
+                
+                st.markdown("---")
+                if st.button("🗑️ Delete Medicine Record", type="primary"):
+                    conn.execute("DELETE FROM medicine WHERE id=?", (sel_mid,))
+                    conn.commit()
+                    st.success("Medicine deleted!")
+                    st.rerun()
+
 # -----------------------------------------------------------------------------
-# MODULE 7: STAFF DIRECTORY (WITH EDIT FUNCTIONALITY)
+# MODULE 7: STAFF DIRECTORY
 # -----------------------------------------------------------------------------
 elif choice == "Staff Directory":
     st.title("👨‍⚕️ Staff & Employee Management")
@@ -943,7 +975,7 @@ elif choice == "Staff Directory":
                         st.rerun()
 
 # -----------------------------------------------------------------------------
-# MODULE 8: DAILY ATTENDANCE (WITH EDIT / OVERWRITE OPTION)
+# MODULE 8: DAILY ATTENDANCE
 # -----------------------------------------------------------------------------
 elif choice == "Daily Attendance":
     st.title("📅 Daily Staff Attendance & Monthly Summary")
@@ -1013,7 +1045,7 @@ elif choice == "Daily Attendance":
             st.info("No attendance records found.")
 
 # -----------------------------------------------------------------------------
-# MODULE 9: CENTER MANAGEMENT
+# MODULE 9: CENTER MANAGEMENT (WITH EDIT FUNCTIONALITY ADDED)
 # -----------------------------------------------------------------------------
 elif choice == "Center Management":
     st.title("🏢 Center / Branch Management")
@@ -1021,7 +1053,7 @@ elif choice == "Center Management":
     if st.session_state["role"] not in ["admin", "hr"]:
         st.error("🔒 Only Admin and HR can access Center Management.")
     else:
-        t1, t2 = st.tabs(["📋 Center List", "➕ Add New Center"])
+        t1, t2, t3 = st.tabs(["📋 Center List", "➕ Add New Center", "✏️ Edit Center Details"])
 
         with t1:
             centers_df = pd.read_sql("SELECT * FROM center ORDER BY id DESC", conn)
@@ -1062,6 +1094,32 @@ elif choice == "Center Management":
                             st.error("Center Code already exists.")
                     else:
                         st.error("Center Name and City are required!")
+
+        with t3:
+            st.subheader("✏️ Edit Center Details")
+            all_centers = conn.execute("SELECT id, center_code, name, city FROM center ORDER BY id DESC").fetchall()
+            if all_centers:
+                cntr_dict = {c["id"]: f"{c['name']} - {c['city']} ({c['center_code']})" for c in all_centers}
+                sel_cid = st.selectbox("Select Center to Edit", options=list(cntr_dict.keys()), format_func=lambda x: cntr_dict[x])
+                c_data = conn.execute("SELECT * FROM center WHERE id=?", (sel_cid,)).fetchone()
+
+                if c_data:
+                    with st.form("edit_center_form"):
+                        ec_name = st.text_input("Center Name *", value=c_data["name"])
+                        ec_city = st.text_input("City *", value=c_data["city"] or "")
+                        ec_address = st.text_area("Address", value=c_data["address"] or "")
+
+                        if st.form_submit_button("Update Center Info"):
+                            if ec_name.strip() and ec_city.strip():
+                                conn.execute(
+                                    "UPDATE center SET name=?, city=?, address=? WHERE id=?",
+                                    (ec_name.strip(), ec_city.strip(), ec_address, sel_cid),
+                                )
+                                conn.commit()
+                                st.success("Center details updated successfully!")
+                                st.rerun()
+                            else:
+                                st.error("Center Name and City are required!")
 
 # -----------------------------------------------------------------------------
 # MODULE 10: REPORTS & ANALYTICS
