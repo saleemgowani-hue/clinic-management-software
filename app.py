@@ -38,7 +38,7 @@ st.markdown(
 
 
 # -----------------------------------------------------------------------------
-# 2. DATABASE INITIALIZATION & MIGRATIONS
+# 2. DATABASE INITIALIZATION & AUTO-MIGRATIONS
 # -----------------------------------------------------------------------------
 def get_db():
     conn = sqlite3.connect("clinic.db", check_same_thread=False)
@@ -146,22 +146,29 @@ def init_db():
         FOREIGN KEY(staff_id) REFERENCES staff(id)
     )""")
 
-    # SAFE MIGRATIONS FOR EXISTING DATABASES
-    migrations = [
-        "ALTER TABLE patient ADD COLUMN center_id INTEGER",
-        "ALTER TABLE staff ADD COLUMN status TEXT DEFAULT 'Active'",
-        "ALTER TABLE staff ADD COLUMN center_id INTEGER",
-        "ALTER TABLE staff ADD COLUMN created_at TEXT",
-        "ALTER TABLE user ADD COLUMN center_id INTEGER",
-        "ALTER TABLE fee ADD COLUMN center_id INTEGER",
-        "ALTER TABLE appointment ADD COLUMN center_id INTEGER"
-    ]
+    # AUTOMATIC COLUMN CHECK & FIX FOR STAFF TABLE
+    c.execute("PRAGMA table_info(staff)")
+    staff_cols = [col[1] for col in c.fetchall()]
+    
+    if "status" not in staff_cols:
+        c.execute("ALTER TABLE staff ADD COLUMN status TEXT DEFAULT 'Active'")
+    if "center_id" not in staff_cols:
+        c.execute("ALTER TABLE staff ADD COLUMN center_id INTEGER")
+    if "created_at" not in staff_cols:
+        c.execute("ALTER TABLE staff ADD COLUMN created_at TEXT")
 
-    for mig in migrations:
-        try:
-            c.execute(mig)
-        except sqlite3.OperationalError:
-            pass
+    # AUTOMATIC COLUMN CHECK FOR OTHER TABLES
+    c.execute("PRAGMA table_info(patient)")
+    patient_cols = [col[1] for col in c.fetchall()]
+    if "center_id" not in patient_cols:
+        c.execute("ALTER TABLE patient ADD COLUMN center_id INTEGER")
+    if "created_at" not in patient_cols:
+        c.execute("ALTER TABLE patient ADD COLUMN created_at TEXT")
+
+    c.execute("PRAGMA table_info(user)")
+    user_cols = [col[1] for col in c.fetchall()]
+    if "center_id" not in user_cols:
+        c.execute("ALTER TABLE user ADD COLUMN center_id INTEGER")
 
     # Default Main Center
     c.execute("SELECT * FROM center WHERE center_code='CTR001'")
@@ -710,7 +717,7 @@ elif choice == "Medicines Inventory":
                     st.rerun()
 
 # -----------------------------------------------------------------------------
-# MODULE 7: STAFF DIRECTORY
+# MODULE 7: STAFF DIRECTORY (FIXED FOR DB SCHEMA)
 # -----------------------------------------------------------------------------
 elif choice == "Staff Directory":
     st.title("👨‍⚕️ Staff & Employee Management")
@@ -883,7 +890,7 @@ elif choice == "Center Management":
                         st.error("Center Name and City are required!")
 
 # -----------------------------------------------------------------------------
-# MODULE 10: REPORTS & ANALYTICS (CITY FILTER FOR ADMIN AND HR)
+# MODULE 10: REPORTS & ANALYTICS
 # -----------------------------------------------------------------------------
 elif choice == "Reports & Analytics":
     st.title("📈 Reports & Analytics Center")
