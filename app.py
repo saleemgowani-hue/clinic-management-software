@@ -708,6 +708,8 @@ elif choice == "Daily Attendance":
                     conn.commit()
                     st.success("Attendance saved successfully!")
                     st.rerun()
+        else:
+            st.info("No active staff members found. Please add staff in 'Staff Directory' first.")
 
     with t2:
         col1, col2 = st.columns(2)
@@ -718,23 +720,26 @@ elif choice == "Daily Attendance":
         last_day = calendar.monthrange(year, month)[1]
         end = f"{year}-{month:02d}-{last_day:02d}"
 
-        att_records = pd.read_sql(
-            """SELECT s.employee_code, s.name, a.status, COUNT(*) as count 
-               FROM attendance a JOIN staff s ON a.staff_id=s.id 
-               WHERE a.att_date >= ? AND a.att_date <= ? 
-               GROUP BY s.id, a.status""",
-            conn,
-            params=[start, end],
-        )
+        try:
+            att_records = pd.read_sql(
+                """SELECT s.employee_code, s.name, a.status, COUNT(*) as count 
+                   FROM attendance a JOIN staff s ON a.staff_id=s.id 
+                   WHERE a.att_date >= ? AND a.att_date <= ? 
+                   GROUP BY s.id, a.status""",
+                conn,
+                params=[start, end],
+            )
 
-        if not att_records.empty:
-            pivot_df = att_records.pivot(index=["employee_code", "name"], columns="status", values="count").fillna(0)
-            st.dataframe(pivot_df, use_container_width=True)
-        else:
-            st.info("No attendance records found for selected month.")
+            if not att_records.empty:
+                pivot_df = att_records.pivot(index=["employee_code", "name"], columns="status", values="count").fillna(0)
+                st.dataframe(pivot_df, use_container_width=True)
+            else:
+                st.info("No attendance records found for selected month.")
+        except Exception:
+            st.info("No attendance records found.")
 
 # -----------------------------------------------------------------------------
-# MODULE 9: CENTER MANAGEMENT (NEW)
+# MODULE 9: CENTER MANAGEMENT
 # -----------------------------------------------------------------------------
 elif choice == "Center Management":
     st.title("🏢 Center / Branch Management")
@@ -782,7 +787,7 @@ elif choice == "Center Management":
                     st.error("Center Name is required!")
 
 # -----------------------------------------------------------------------------
-# MODULE 10: REPORTS & ANALYTICS (EXPANDED)
+# MODULE 10: REPORTS & ANALYTICS
 # -----------------------------------------------------------------------------
 elif choice == "Reports & Analytics":
     st.title("📈 Reports & Analytics Center")
@@ -830,15 +835,18 @@ elif choice == "Reports & Analytics":
         st.subheader("📅 Daily Staff Attendance Report")
         att_sel_date = st.date_input("Select Date", value=date.today(), key="att_daily_date")
 
-        daily_att_query = """SELECT s.employee_code, s.name, s.designation, a.status, a.att_date 
-                             FROM attendance a JOIN staff s ON a.staff_id=s.id 
-                             WHERE a.att_date = ? ORDER BY s.name"""
-        d_att_df = pd.read_sql(daily_att_query, conn, params=[str(att_sel_date)])
+        try:
+            daily_att_query = """SELECT s.employee_code, s.name, s.designation, a.status, a.att_date 
+                                 FROM attendance a JOIN staff s ON a.staff_id=s.id 
+                                 WHERE a.att_date = ? ORDER BY s.name"""
+            d_att_df = pd.read_sql(daily_att_query, conn, params=[str(att_sel_date)])
 
-        st.dataframe(d_att_df, use_container_width=True)
-        if not d_att_df.empty:
-            st.download_button("📥 Download Daily Attendance (CSV)", d_att_df.to_csv(index=False).encode('utf-8'), f"daily_attendance_{att_sel_date}.csv", "text/csv")
-        else:
+            if not d_att_df.empty:
+                st.dataframe(d_att_df, use_container_width=True)
+                st.download_button("📥 Download Daily Attendance (CSV)", d_att_df.to_csv(index=False).encode('utf-8'), f"daily_attendance_{att_sel_date}.csv", "text/csv")
+            else:
+                st.info("No attendance recorded for this date.")
+        except Exception:
             st.info("No attendance recorded for this date.")
 
     # 4. Monthly Attendance Summary
@@ -852,20 +860,23 @@ elif choice == "Reports & Analytics":
         last_d = calendar.monthrange(m_year, m_month)[1]
         end_m = f"{m_year}-{m_month:02d}-{last_d:02d}"
 
-        m_att_records = pd.read_sql(
-            """SELECT s.employee_code, s.name, a.status, COUNT(*) as count 
-               FROM attendance a JOIN staff s ON a.staff_id=s.id 
-               WHERE a.att_date >= ? AND a.att_date <= ? 
-               GROUP BY s.id, a.status""",
-            conn,
-            params=[start_m, end_m],
-        )
+        try:
+            m_att_records = pd.read_sql(
+                """SELECT s.employee_code, s.name, a.status, COUNT(*) as count 
+                   FROM attendance a JOIN staff s ON a.staff_id=s.id 
+                   WHERE a.att_date >= ? AND a.att_date <= ? 
+                   GROUP BY s.id, a.status""",
+                conn,
+                params=[start_m, end_m],
+            )
 
-        if not m_att_records.empty:
-            pivot_m = m_att_records.pivot(index=["employee_code", "name"], columns="status", values="count").fillna(0)
-            st.dataframe(pivot_m, use_container_width=True)
-            st.download_button("📥 Download Monthly Attendance (CSV)", pivot_m.to_csv().encode('utf-8'), f"monthly_attendance_{m_year}_{m_month}.csv", "text/csv")
-        else:
+            if not m_att_records.empty:
+                pivot_m = m_att_records.pivot(index=["employee_code", "name"], columns="status", values="count").fillna(0)
+                st.dataframe(pivot_m, use_container_width=True)
+                st.download_button("📥 Download Monthly Attendance (CSV)", pivot_m.to_csv().encode('utf-8'), f"monthly_attendance_{m_year}_{m_month}.csv", "text/csv")
+            else:
+                st.info("No monthly attendance records found.")
+        except Exception:
             st.info("No monthly attendance records found.")
 
 # -----------------------------------------------------------------------------
