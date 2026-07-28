@@ -38,7 +38,7 @@ st.markdown(
 
 
 # -----------------------------------------------------------------------------
-# 2. DATABASE INITIALIZATION
+# 2. DATABASE INITIALIZATION & MIGRATIONS
 # -----------------------------------------------------------------------------
 def get_db():
     conn = sqlite3.connect("clinic.db", check_same_thread=False)
@@ -50,11 +50,21 @@ def init_db():
     conn = get_db()
     c = conn.cursor()
 
+    c.execute("""CREATE TABLE IF NOT EXISTS center (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        center_code TEXT UNIQUE,
+        name TEXT NOT NULL,
+        city TEXT,
+        address TEXT,
+        created_at TEXT
+    )""")
+
     c.execute("""CREATE TABLE IF NOT EXISTS user (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
-        role TEXT NOT NULL
+        role TEXT NOT NULL,
+        center_id INTEGER
     )""")
 
     c.execute("""CREATE TABLE IF NOT EXISTS patient (
@@ -66,6 +76,7 @@ def init_db():
         gender TEXT,
         mobile TEXT,
         address TEXT,
+        center_id INTEGER,
         created_at TEXT
     )""")
 
@@ -76,6 +87,7 @@ def init_db():
         appt_date TEXT NOT NULL,
         appt_time TEXT,
         status TEXT DEFAULT 'Booked',
+        center_id INTEGER,
         FOREIGN KEY(patient_id) REFERENCES patient(id)
     )""")
 
@@ -99,6 +111,7 @@ def init_db():
         total REAL DEFAULT 0,
         payment_mode TEXT,
         paid_on TEXT,
+        center_id INTEGER,
         FOREIGN KEY(patient_id) REFERENCES patient(id)
     )""")
 
@@ -121,6 +134,7 @@ def init_db():
         joining_date TEXT,
         salary REAL DEFAULT 0,
         status TEXT DEFAULT 'Active',
+        center_id INTEGER,
         created_at TEXT
     )""")
 
@@ -132,6 +146,31 @@ def init_db():
         FOREIGN KEY(staff_id) REFERENCES staff(id)
     )""")
 
+    # Safe Migrations for existing DBs
+    try:
+        c.execute("ALTER TABLE staff ADD COLUMN status TEXT DEFAULT 'Active'")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE staff ADD COLUMN center_id INTEGER")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        c.execute("ALTER TABLE user ADD COLUMN center_id INTEGER")
+    except sqlite3.OperationalError:
+        pass
+
+    # Default Main Center
+    c.execute("SELECT * FROM center WHERE center_code='CTR001'")
+    if not c.fetchone():
+        c.execute(
+            "INSERT INTO center (center_code, name, city, address, created_at) VALUES ('CTR001', 'Main Branch', 'Raipur', 'Central Office', ?)",
+            (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),)
+        )
+
+    # Default Admin User
     c.execute("SELECT * FROM user WHERE username='admin'")
     if not c.fetchone():
         hashed_pw = hashlib.sha256("admin123".encode()).hexdigest()
@@ -168,11 +207,25 @@ def next_employee_code():
     return f"E{count:05d}"
 
 
+def next_center_code():
+    conn = get_db()
+    count = conn.execute("SELECT COUNT(*) FROM center").fetchone()[0] + 1
+    conn.close()
+    return f"CTR{count:03d}"
+
+
 def get_patients_dropdown():
     conn = get_db()
     df = pd.read_sql("SELECT id, patient_code, name FROM patient ORDER BY name", conn)
     conn.close()
     return {row["id"]: f"{row['name']} ({row['patient_code']})" for _, row in df.iterrows()}
+
+
+def get_centers_dropdown():
+    conn = get_db()
+    df = pd.read_sql("SELECT id, center_code, name FROM center ORDER BY name", conn)
+    conn.close()
+    return {row["id"]: f"{row['name']} ({row['center_code']})" for _, row in df.iterrows()}
 
 
 # -----------------------------------------------------------------------------
@@ -187,7 +240,7 @@ if "logged_in" not in st.session_state:
 if not st.session_state["logged_in"]:
     st.title("🏥 SN Clinic Management System")
     col1, col2, col3 = st.columns([1, 1.5, 1])
-    
+
     with col2:
         auth_tab1, auth_tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
 
@@ -221,7 +274,7 @@ if not st.session_state["logged_in"]:
             signup_user = st.text_input("Choose Username *", key="su_user").strip()
             signup_pass = st.text_input("Choose Password *", type="password", key="su_pass")
             signup_conf = st.text_input("Confirm Password *", type="password", key="su_conf")
-            signup_role = st.selectbox("Role", ["receptionist", "doctor"], key="su_role")
+            signup_role = st.selectbox("Role", ["receptionist", "doctor", "admin"], key="su_role")
 
             if st.button("Sign Up", use_container_width=True, key="signup_btn"):
                 if not signup_user or not signup_pass:
@@ -260,6 +313,7 @@ menu = [
     "Medicines Inventory",
     "Staff Directory",
     "Daily Attendance",
+    "Center Management",
     "Reports & Analytics",
     "Users Management",
 ]
@@ -381,6 +435,7 @@ elif choice == "Patients":
                             st.rerun()
 
     with t2:
+        centers_map = get_centers_dropdown()
         with st.form("add_p_form"):
             st.write(f"**New Patient Code:** `{next_patient_code()}`")
             name = st.text_input("Full Name *")
@@ -390,14 +445,15 @@ elif choice == "Patients":
             gender = col2.selectbox("Gender", ["Male", "Female", "Other"])
             mobile = st.text_input("Mobile Number")
             address = st.text_area("Address")
+            selected_ctr = st.selectbox("Assign Center", options=list(centers_map.keys()), format_func=lambda x: centers_map[x]) if centers_map else None
 
             if st.form_submit_button("Register Patient"):
                 if name.strip():
                     pcode = next_patient_code()
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     conn.execute(
-                        "INSERT INTO patient (patient_code, name, guardian_name, age, gender, mobile, address, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                        (pcode, name, g_name, age if age > 0 else None, gender, mobile, address, now),
+                        "INSERT INTO patient (patient_code, name, guardian_name, age, gender, mobile, address, center_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (pcode, name, g_name, age if age > 0 else None, gender, mobile, address, selected_ctr, now),
                     )
                     conn.commit()
                     st.success(f"Patient registered with ID {pcode}")
@@ -588,6 +644,7 @@ elif choice == "Staff Directory":
         st.dataframe(staff_df, use_container_width=True)
 
     with t2:
+        centers_map = get_centers_dropdown()
         with st.form("add_staff_form"):
             st.write(f"**Employee Code:** `{next_employee_code()}`")
             sname = st.text_input("Full Name *")
@@ -600,14 +657,15 @@ elif choice == "Staff Directory":
             jdate = col3.date_input("Joining Date", date.today())
             salary = col4.number_input("Salary (₹)", min_value=0.0, value=0.0)
             status = st.selectbox("Status", ["Active", "Inactive"])
+            selected_ctr = st.selectbox("Assign Center", options=list(centers_map.keys()), format_func=lambda x: centers_map[x]) if centers_map else None
 
             if st.form_submit_button("Register Staff"):
                 if sname.strip():
                     ecode = next_employee_code()
                     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     conn.execute(
-                        "INSERT INTO staff (employee_code, name, designation, mobile, city, address, joining_date, salary, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (ecode, sname, desig, mobile, city, address, str(jdate), salary, status, now),
+                        "INSERT INTO staff (employee_code, name, designation, mobile, city, address, joining_date, salary, status, center_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (ecode, sname, desig, mobile, city, address, str(jdate), salary, status, selected_ctr, now),
                     )
                     conn.commit()
                     st.success(f"Staff '{sname}' added with ID {ecode}")
@@ -619,7 +677,7 @@ elif choice == "Staff Directory":
 elif choice == "Daily Attendance":
     st.title("📅 Daily Staff Attendance & Monthly Summary")
 
-    t1, t2 = st.tabs(["✍️ Mark Daily Attendance", "📊 Monthly Attendance Report"])
+    t1, t2 = st.tabs(["✍️ Mark Daily Attendance", "📊 Attendance Report"])
 
     with t1:
         att_date = st.date_input("Select Attendance Date", date.today())
@@ -676,45 +734,142 @@ elif choice == "Daily Attendance":
             st.info("No attendance records found for selected month.")
 
 # -----------------------------------------------------------------------------
-# MODULE 9: REPORTS & ANALYTICS
+# MODULE 9: CENTER MANAGEMENT (NEW)
+# -----------------------------------------------------------------------------
+elif choice == "Center Management":
+    st.title("🏢 Center / Branch Management")
+
+    t1, t2 = st.tabs(["📋 Center List", "➕ Add New Center"])
+
+    with t1:
+        centers_df = pd.read_sql("SELECT * FROM center ORDER BY id DESC", conn)
+        st.dataframe(centers_df, use_container_width=True)
+
+        if not centers_df.empty:
+            st.markdown("---")
+            st.subheader("🗑️ Delete Center")
+            c_options = {row["id"]: f"{row['name']} ({row['center_code']})" for _, row in centers_df.iterrows()}
+            cid_del = st.selectbox("Select Center to Delete", options=list(c_options.keys()), format_func=lambda x: c_options[x])
+
+            if st.button("Delete Selected Center"):
+                conn.execute("DELETE FROM center WHERE id=?", (cid_del,))
+                conn.commit()
+                st.success("Center deleted successfully!")
+                st.rerun()
+
+    with t2:
+        with st.form("add_center_form"):
+            st.write(f"**New Center Code:** `{next_center_code()}`")
+            cname = st.text_input("Center Name *").strip()
+            city = st.text_input("City")
+            address = st.text_area("Address")
+
+            if st.form_submit_button("Add Center"):
+                if cname:
+                    ccode = next_center_code()
+                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    try:
+                        conn.execute(
+                            "INSERT INTO center (center_code, name, city, address, created_at) VALUES (?, ?, ?, ?, ?)",
+                            (ccode, cname, city, address, now),
+                        )
+                        conn.commit()
+                        st.success(f"Center '{cname}' added successfully with Code: {ccode}")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Center Code already exists.")
+                else:
+                    st.error("Center Name is required!")
+
+# -----------------------------------------------------------------------------
+# MODULE 10: REPORTS & ANALYTICS (EXPANDED)
 # -----------------------------------------------------------------------------
 elif choice == "Reports & Analytics":
-    st.title("📈 Reports & Export Center")
+    st.title("📈 Reports & Analytics Center")
 
-    st.subheader("🗓️ Date Filtered Fee Collection")
-    col1, col2 = st.columns(2)
-    start_d = col1.date_input("Start Date", value=None)
-    end_d = col2.date_input("End Date", value=None)
+    rep_tab1, rep_tab2, rep_tab3, rep_tab4 = st.tabs([
+        "👨‍👩‍👧‍👦 Day-wise Patient Report", 
+        "💳 Day-wise Fee Report", 
+        "📅 Daily Staff Attendance Report",
+        "📊 Monthly Staff Attendance Summary"
+    ])
 
-    fee_query = "SELECT f.paid_on, p.name as patient_name, p.patient_code, f.consultation_fee, f.medicine_fee, f.discount, f.total, f.payment_mode FROM fee f LEFT JOIN patient p ON f.patient_id=p.id"
-    params = []
-    if start_d or end_d:
-        fee_query += " WHERE 1=1"
-        if start_d:
-            fee_query += " AND DATE(f.paid_on) >= ?"
-            params.append(str(start_d))
-        if end_d:
-            fee_query += " AND DATE(f.paid_on) <= ?"
-            params.append(str(end_d))
+    # 1. Day-wise Patient Report
+    with rep_tab1:
+        st.subheader("👨‍👩‍👧‍👦 Day-wise Patient Registration Report")
+        col1, col2 = st.columns(2)
+        p_start = col1.date_input("Start Date", value=date.today(), key="p_start")
+        p_end = col2.date_input("End Date", value=date.today(), key="p_end")
 
-    fees_data = pd.read_sql(fee_query, conn, params=params)
-    st.dataframe(fees_data, use_container_width=True)
+        p_query = "SELECT patient_code, name, guardian_name, age, gender, mobile, address, created_at FROM patient WHERE DATE(created_at) >= ? AND DATE(created_at) <= ? ORDER BY id DESC"
+        p_df = pd.read_sql(p_query, conn, params=[str(p_start), str(p_end)])
 
-    col_e1, col_e2 = st.columns(2)
+        st.dataframe(p_df, use_container_width=True)
+        if not p_df.empty:
+            st.download_button("📥 Download Patient Report (CSV)", p_df.to_csv(index=False).encode('utf-8'), "patient_report.csv", "text/csv")
 
-    # CSV Fee Export
-    if not fees_data.empty:
-        csv_buffer = fees_data.to_csv(index=False).encode('utf-8')
-        col_e1.download_button("📥 Export Fees (CSV)", data=csv_buffer, file_name="fee_report.csv", mime="text/csv")
+    # 2. Day-wise Fee Report
+    with rep_tab2:
+        st.subheader("💳 Day-wise Fee Collection Report")
+        col1, col2 = st.columns(2)
+        f_start = col1.date_input("Start Date", value=date.today(), key="f_start")
+        f_end = col2.date_input("End Date", value=date.today(), key="f_end")
 
-    # CSV Patients Export
-    p_all = pd.read_sql("SELECT * FROM patient", conn)
-    if not p_all.empty:
-        p_csv_buffer = p_all.to_csv(index=False).encode('utf-8')
-        col_e2.download_button("👥 Export All Patients (CSV)", data=p_csv_buffer, file_name="patient_list.csv", mime="text/csv")
+        fee_query = """SELECT f.paid_on, p.patient_code, p.name as patient_name, f.consultation_fee, f.medicine_fee, f.discount, f.total, f.payment_mode 
+                       FROM fee f LEFT JOIN patient p ON f.patient_id=p.id 
+                       WHERE DATE(f.paid_on) >= ? AND DATE(f.paid_on) <= ? ORDER BY f.id DESC"""
+        fees_data = pd.read_sql(fee_query, conn, params=[str(f_start), str(f_end)])
+
+        st.dataframe(fees_data, use_container_width=True)
+        if not fees_data.empty:
+            st.metric("Total Collection (Period)", f"₹{fees_data['total'].sum():,.2f}")
+            st.download_button("📥 Download Fee Report (CSV)", fees_data.to_csv(index=False).encode('utf-8'), "fee_report.csv", "text/csv")
+
+    # 3. Daily Attendance Report
+    with rep_tab3:
+        st.subheader("📅 Daily Staff Attendance Report")
+        att_sel_date = st.date_input("Select Date", value=date.today(), key="att_daily_date")
+
+        daily_att_query = """SELECT s.employee_code, s.name, s.designation, a.status, a.att_date 
+                             FROM attendance a JOIN staff s ON a.staff_id=s.id 
+                             WHERE a.att_date = ? ORDER BY s.name"""
+        d_att_df = pd.read_sql(daily_att_query, conn, params=[str(att_sel_date)])
+
+        st.dataframe(d_att_df, use_container_width=True)
+        if not d_att_df.empty:
+            st.download_button("📥 Download Daily Attendance (CSV)", d_att_df.to_csv(index=False).encode('utf-8'), f"daily_attendance_{att_sel_date}.csv", "text/csv")
+        else:
+            st.info("No attendance recorded for this date.")
+
+    # 4. Monthly Attendance Summary
+    with rep_tab4:
+        st.subheader("📊 Monthly Staff Attendance Summary")
+        col1, col2 = st.columns(2)
+        m_year = col1.number_input("Select Year", min_value=2020, max_value=2030, value=date.today().year, key="m_yr")
+        m_month = col2.number_input("Select Month (1-12)", min_value=1, max_value=12, value=date.today().month, key="m_mn")
+
+        start_m = f"{m_year}-{m_month:02d}-01"
+        last_d = calendar.monthrange(m_year, m_month)[1]
+        end_m = f"{m_year}-{m_month:02d}-{last_d:02d}"
+
+        m_att_records = pd.read_sql(
+            """SELECT s.employee_code, s.name, a.status, COUNT(*) as count 
+               FROM attendance a JOIN staff s ON a.staff_id=s.id 
+               WHERE a.att_date >= ? AND a.att_date <= ? 
+               GROUP BY s.id, a.status""",
+            conn,
+            params=[start_m, end_m],
+        )
+
+        if not m_att_records.empty:
+            pivot_m = m_att_records.pivot(index=["employee_code", "name"], columns="status", values="count").fillna(0)
+            st.dataframe(pivot_m, use_container_width=True)
+            st.download_button("📥 Download Monthly Attendance (CSV)", pivot_m.to_csv().encode('utf-8'), f"monthly_attendance_{m_year}_{m_month}.csv", "text/csv")
+        else:
+            st.info("No monthly attendance records found.")
 
 # -----------------------------------------------------------------------------
-# MODULE 10: USERS MANAGEMENT
+# MODULE 11: USERS MANAGEMENT
 # -----------------------------------------------------------------------------
 elif choice == "Users Management":
     st.title("⚙️ User Access Control")
