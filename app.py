@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 # -----------------------------------------------------------------------------
-# 1. PAGE CONFIG & CUSTOM STYLING
+# 1. PAGE CONFIG & CUSTOM STYLING (Dark/Light Mode Compatible)
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="SN Clinic Management System",
@@ -21,36 +21,27 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    div[data-testid="stMetric"], 
+    /* Responsive Text Color for Dark/Light Mode Compatibility */
     div[data-testid="stMetricLabel"], 
     div[data-testid="stMetricValue"], 
     div[data-testid="stMetricDelta"],
     .stMetric label,
     p, span, h1, h2, h3, h4, h5, h6 {
-        color: #000000 !important;
+        color: inherit !important;
     }
 
+    /* Force high contrast for headers */
+    h1, h2, h3, h4, h5, h6 {
+        font-weight: 700 !important;
+    }
+
+    /* Metric Cards Styling */
     div[data-testid="stMetric"] {
-        background-color: #ffffff !important;
         padding: 12px 16px !important;
         border-radius: 10px !important;
         border: 1px solid #d1d5db !important;
         border-left: 6px solid #0284c7 !important;
         box-shadow: 0 2px 4px rgba(0,0,0,0.08) !important;
-    }
-
-    div[data-testid="stMetricValue"] {
-        font-weight: 800 !important;
-        color: #000000 !important;
-    }
-
-    div[data-testid="stMetricLabel"] {
-        font-weight: 700 !important;
-        color: #1a1a1a !important;
-    }
-
-    div[data-testid="stDataFrame"] * {
-        color: #000000 !important;
     }
 
     div[data-testid="stForm"], div.stTextInput {
@@ -402,7 +393,7 @@ today_str = date.today().isoformat()
 # -----------------------------------------------------------------------------
 if choice == "Dashboard":
     st.markdown(
-        f"<h1 style='color: #000000;'>📊 Clinic Overview Dashboard {f'({selected_city})' if selected_city != 'All Cities' else ''}</h1>",
+        f"<h1>📊 Clinic Overview Dashboard {f'({selected_city})' if selected_city != 'All Cities' else ''}</h1>",
         unsafe_allow_html=True,
     )
 
@@ -434,7 +425,7 @@ if choice == "Dashboard":
     c5.metric("Follow-ups Scheduled", followups_due)
 
     st.markdown("---")
-    st.markdown("<h3 style='color: #000000;'>📋 Today's Appointments</h3>", unsafe_allow_html=True)
+    st.markdown("<h3>📋 Today's Appointments</h3>", unsafe_allow_html=True)
     
     try:
         appt_query = """SELECT a.id, p.patient_code, p.name as patient_name, c.city, c.name as center_name, a.doctor_name, a.appt_time, a.status 
