@@ -160,7 +160,7 @@ def init_db():
         try:
             c.execute(mig)
         except sqlite3.OperationalError:
-            pass  # Column already exists
+            pass
 
     # Default Main Center
     c.execute("SELECT * FROM center WHERE center_code='CTR001'")
@@ -247,6 +247,15 @@ def get_unique_cities():
         return ["All Cities"]
 
 
+def get_user_city(center_id):
+    if not center_id:
+        return "All Cities"
+    conn = get_db()
+    res = conn.execute("SELECT city FROM center WHERE id=?", (center_id,)).fetchone()
+    conn.close()
+    return res["city"] if res else "All Cities"
+
+
 # -----------------------------------------------------------------------------
 # 4. AUTHENTICATION (LOGIN & SIGN UP)
 # -----------------------------------------------------------------------------
@@ -327,12 +336,14 @@ if not st.session_state["logged_in"]:
 st.sidebar.title("🏥 SN Clinic")
 st.sidebar.write(f"Logged in: **{st.session_state['username']}** (`{st.session_state['role']}`)")
 
-# CITY FILTER FOR ADMIN
+# GLOBAL CITY FILTER ONLY FOR ADMIN
 selected_city = "All Cities"
 if st.session_state["role"] == "admin":
     all_cities = get_unique_cities()
     selected_city = st.sidebar.selectbox("🌆 Filter by City / Branch", options=all_cities)
     st.sidebar.markdown("---")
+else:
+    selected_city = get_user_city(st.session_state["center_id"])
 
 menu = [
     "Dashboard",
@@ -443,7 +454,7 @@ elif choice == "Patients":
             df = pd.read_sql(query, conn, params=params)
             st.dataframe(df, use_container_width=True)
         except Exception:
-            st.error("Error reading patient records. Refreshing database structure...")
+            st.error("Error reading patient records.")
 
         st.markdown("---")
         st.subheader("📄 Patient Detail View")
@@ -786,7 +797,7 @@ elif choice == "Daily Attendance":
                     st.success("Attendance saved successfully!")
                     st.rerun()
         else:
-            st.info("No active staff members found. Please add staff in 'Staff Directory' first.")
+            st.info("No active staff members found.")
 
     with t2:
         col1, col2 = st.columns(2)
@@ -821,53 +832,59 @@ elif choice == "Daily Attendance":
 elif choice == "Center Management":
     st.title("🏢 Center / Branch Management")
 
-    t1, t2 = st.tabs(["📋 Center List", "➕ Add New Center"])
+    if st.session_state["role"] != "admin":
+        st.error("🔒 Only Admin can access Center Management.")
+    else:
+        t1, t2 = st.tabs(["📋 Center List", "➕ Add New Center"])
 
-    with t1:
-        centers_df = pd.read_sql("SELECT * FROM center ORDER BY id DESC", conn)
-        st.dataframe(centers_df, use_container_width=True)
+        with t1:
+            centers_df = pd.read_sql("SELECT * FROM center ORDER BY id DESC", conn)
+            st.dataframe(centers_df, use_container_width=True)
 
-        if not centers_df.empty:
-            st.markdown("---")
-            st.subheader("🗑️ Delete Center")
-            c_options = {row["id"]: f"{row['name']} ({row['center_code']}) - {row['city']}" for _, row in centers_df.iterrows()}
-            cid_del = st.selectbox("Select Center to Delete", options=list(c_options.keys()), format_func=lambda x: c_options[x])
+            if not centers_df.empty:
+                st.markdown("---")
+                st.subheader("🗑️ Delete Center")
+                c_options = {row["id"]: f"{row['name']} ({row['center_code']}) - {row['city']}" for _, row in centers_df.iterrows()}
+                cid_del = st.selectbox("Select Center to Delete", options=list(c_options.keys()), format_func=lambda x: c_options[x])
 
-            if st.button("Delete Selected Center"):
-                conn.execute("DELETE FROM center WHERE id=?", (cid_del,))
-                conn.commit()
-                st.success("Center deleted successfully!")
-                st.rerun()
+                if st.button("Delete Selected Center"):
+                    conn.execute("DELETE FROM center WHERE id=?", (cid_del,))
+                    conn.commit()
+                    st.success("Center deleted successfully!")
+                    st.rerun()
 
-    with t2:
-        with st.form("add_center_form"):
-            st.write(f"**New Center Code:** `{next_center_code()}`")
-            cname = st.text_input("Center Name *").strip()
-            city = st.text_input("City *").strip()
-            address = st.text_area("Address")
+        with t2:
+            with st.form("add_center_form"):
+                st.write(f"**New Center Code:** `{next_center_code()}`")
+                cname = st.text_input("Center Name *").strip()
+                city = st.text_input("City *").strip()
+                address = st.text_area("Address")
 
-            if st.form_submit_button("Add Center"):
-                if cname and city:
-                    ccode = next_center_code()
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    try:
-                        conn.execute(
-                            "INSERT INTO center (center_code, name, city, address, created_at) VALUES (?, ?, ?, ?, ?)",
-                            (ccode, cname, city, address, now),
-                        )
-                        conn.commit()
-                        st.success(f"Center '{cname}' in '{city}' added successfully!")
-                        st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("Center Code already exists.")
-                else:
-                    st.error("Center Name and City are required!")
+                if st.form_submit_button("Add Center"):
+                    if cname and city:
+                        ccode = next_center_code()
+                        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        try:
+                            conn.execute(
+                                "INSERT INTO center (center_code, name, city, address, created_at) VALUES (?, ?, ?, ?, ?)",
+                                (ccode, cname, city, address, now),
+                            )
+                            conn.commit()
+                            st.success(f"Center '{cname}' in '{city}' added successfully!")
+                            st.rerun()
+                        except sqlite3.IntegrityError:
+                            st.error("Center Code already exists.")
+                    else:
+                        st.error("Center Name and City are required!")
 
 # -----------------------------------------------------------------------------
-# MODULE 10: REPORTS & ANALYTICS
+# MODULE 10: REPORTS & ANALYTICS (CITY FILTER ONLY FOR ADMIN)
 # -----------------------------------------------------------------------------
 elif choice == "Reports & Analytics":
     st.title("📈 Reports & Analytics Center")
+
+    all_cities_list = get_unique_cities()
+    is_admin = st.session_state["role"] == "admin"
 
     rep_tab1, rep_tab2, rep_tab3, rep_tab4 = st.tabs([
         "👨‍👩‍👧‍👦 Day-wise Patient Report", 
@@ -879,34 +896,50 @@ elif choice == "Reports & Analytics":
     # 1. Day-wise Patient Report
     with rep_tab1:
         st.subheader("👨‍👩‍👧‍👦 Day-wise Patient Registration Report")
-        col1, col2 = st.columns(2)
-        p_start = col1.date_input("Start Date", value=date.today(), key="p_start")
-        p_end = col2.date_input("End Date", value=date.today(), key="p_end")
+        
+        if is_admin:
+            c_filter_1, c_col1, c_col2 = st.columns([1.5, 1, 1])
+            r1_city = c_filter_1.selectbox("🌆 Select City / Branch", options=all_cities_list, key="r1_city_select")
+        else:
+            c_col1, c_col2 = st.columns(2)
+            r1_city = selected_city
+
+        p_start = c_col1.date_input("Start Date", value=date.today(), key="p_start")
+        p_end = c_col2.date_input("End Date", value=date.today(), key="p_end")
 
         try:
             p_query = """SELECT p.patient_code, p.name, p.guardian_name, p.age, p.gender, p.mobile, c.name as center_name, c.city, p.created_at 
                        FROM patient p LEFT JOIN center c ON p.center_id=c.id 
                        WHERE DATE(p.created_at) >= ? AND DATE(p.created_at) <= ?"""
             params = [str(p_start), str(p_end)]
-            if selected_city != "All Cities":
+            if r1_city != "All Cities":
                 p_query += " AND c.city = ?"
-                params.append(selected_city)
+                params.append(r1_city)
             p_query += " ORDER BY p.id DESC"
 
             p_df = pd.read_sql(p_query, conn, params=params)
 
             st.dataframe(p_df, use_container_width=True)
             if not p_df.empty:
-                st.download_button("📥 Download Patient Report (CSV)", p_df.to_csv(index=False).encode('utf-8'), "patient_report.csv", "text/csv")
+                st.download_button("📥 Download Patient Report (CSV)", p_df.to_csv(index=False).encode('utf-8'), f"patient_report_{r1_city}.csv", "text/csv")
+            else:
+                st.info("No records found for selected criteria.")
         except Exception:
             st.info("No records found for selected period.")
 
     # 2. Day-wise Fee Report
     with rep_tab2:
         st.subheader("💳 Day-wise Fee Collection Report")
-        col1, col2 = st.columns(2)
-        f_start = col1.date_input("Start Date", value=date.today(), key="f_start")
-        f_end = col2.date_input("End Date", value=date.today(), key="f_end")
+        
+        if is_admin:
+            c_filter_2, c_col1, c_col2 = st.columns([1.5, 1, 1])
+            r2_city = c_filter_2.selectbox("🌆 Select City / Branch", options=all_cities_list, key="r2_city_select")
+        else:
+            c_col1, c_col2 = st.columns(2)
+            r2_city = selected_city
+
+        f_start = c_col1.date_input("Start Date", value=date.today(), key="f_start")
+        f_end = c_col2.date_input("End Date", value=date.today(), key="f_end")
 
         try:
             fee_query = """SELECT f.paid_on, p.patient_code, p.name as patient_name, c.name as center_name, c.city, f.consultation_fee, f.medicine_fee, f.discount, f.total, f.payment_mode 
@@ -915,9 +948,9 @@ elif choice == "Reports & Analytics":
                            LEFT JOIN center c ON p.center_id=c.id 
                            WHERE DATE(f.paid_on) >= ? AND DATE(f.paid_on) <= ?"""
             params = [str(f_start), str(f_end)]
-            if selected_city != "All Cities":
+            if r2_city != "All Cities":
                 fee_query += " AND c.city = ?"
-                params.append(selected_city)
+                params.append(r2_city)
             fee_query += " ORDER BY f.id DESC"
 
             fees_data = pd.read_sql(fee_query, conn, params=params)
@@ -925,14 +958,24 @@ elif choice == "Reports & Analytics":
             st.dataframe(fees_data, use_container_width=True)
             if not fees_data.empty:
                 st.metric("Total Collection (Period)", f"₹{fees_data['total'].sum():,.2f}")
-                st.download_button("📥 Download Fee Report (CSV)", fees_data.to_csv(index=False).encode('utf-8'), "fee_report.csv", "text/csv")
+                st.download_button("📥 Download Fee Report (CSV)", fees_data.to_csv(index=False).encode('utf-8'), f"fee_report_{r2_city}.csv", "text/csv")
+            else:
+                st.info("No fee collection records found for selected criteria.")
         except Exception:
             st.info("No fee collection records found.")
 
     # 3. Daily Attendance Report
     with rep_tab3:
         st.subheader("📅 Daily Staff Attendance Report")
-        att_sel_date = st.date_input("Select Date", value=date.today(), key="att_daily_date")
+        
+        if is_admin:
+            c_filter_3, c_col1 = st.columns([1.5, 1])
+            r3_city = c_filter_3.selectbox("🌆 Select City / Branch", options=all_cities_list, key="r3_city_select")
+        else:
+            c_col1 = st.container()
+            r3_city = selected_city
+
+        att_sel_date = c_col1.date_input("Select Date", value=date.today(), key="att_daily_date")
 
         try:
             daily_att_query = """SELECT s.employee_code, s.name, s.designation, c.name as center_name, c.city, a.status, a.att_date 
@@ -941,25 +984,32 @@ elif choice == "Reports & Analytics":
                                  LEFT JOIN center c ON s.center_id=c.id 
                                  WHERE a.att_date = ?"""
             params = [str(att_sel_date)]
-            if selected_city != "All Cities":
-                daily_att_query += " AND c.city = ?"
-                params.append(selected_city)
+            if r3_city != "All Cities":
+                daily_att_query += " AND (c.city = ? OR s.city = ?)"
+                params.extend([r3_city, r3_city])
             daily_att_query += " ORDER BY s.name"
 
             d_att_df = pd.read_sql(daily_att_query, conn, params=params)
 
             if not d_att_df.empty:
                 st.dataframe(d_att_df, use_container_width=True)
-                st.download_button("📥 Download Daily Attendance (CSV)", d_att_df.to_csv(index=False).encode('utf-8'), f"daily_attendance_{att_sel_date}.csv", "text/csv")
+                st.download_button("📥 Download Daily Attendance (CSV)", d_att_df.to_csv(index=False).encode('utf-8'), f"daily_attendance_{r3_city}_{att_sel_date}.csv", "text/csv")
             else:
-                st.info("No attendance recorded for this date.")
+                st.info("No attendance recorded for this date and city selection.")
         except Exception:
             st.info("No attendance recorded for this date.")
 
     # 4. Monthly Attendance Summary
     with rep_tab4:
         st.subheader("📊 Monthly Staff Attendance Summary")
-        col1, col2 = st.columns(2)
+        
+        if is_admin:
+            c_filter_4, col1, col2 = st.columns([1.5, 1, 1])
+            r4_city = c_filter_4.selectbox("🌆 Select City / Branch", options=all_cities_list, key="r4_city_select")
+        else:
+            col1, col2 = st.columns(2)
+            r4_city = selected_city
+
         m_year = col1.number_input("Select Year", min_value=2020, max_value=2030, value=date.today().year, key="m_yr")
         m_month = col2.number_input("Select Month (1-12)", min_value=1, max_value=12, value=date.today().month, key="m_mn")
 
@@ -968,21 +1018,26 @@ elif choice == "Reports & Analytics":
         end_m = f"{m_year}-{m_month:02d}-{last_d:02d}"
 
         try:
-            m_att_records = pd.read_sql(
-                """SELECT s.employee_code, s.name, a.status, COUNT(*) as count 
-                   FROM attendance a JOIN staff s ON a.staff_id=s.id 
-                   WHERE a.att_date >= ? AND a.att_date <= ? 
-                   GROUP BY s.id, a.status""",
-                conn,
-                params=[start_m, end_m],
-            )
+            m_att_query = """SELECT s.employee_code, s.name, a.status, COUNT(*) as count 
+                             FROM attendance a 
+                             JOIN staff s ON a.staff_id=s.id 
+                             LEFT JOIN center c ON s.center_id=c.id
+                             WHERE a.att_date >= ? AND a.att_date <= ?"""
+            params = [start_m, end_m]
+            if r4_city != "All Cities":
+                m_att_query += " AND (c.city = ? OR s.city = ?)"
+                params.extend([r4_city, r4_city])
+
+            m_att_query += " GROUP BY s.id, a.status"
+
+            m_att_records = pd.read_sql(m_att_query, conn, params=params)
 
             if not m_att_records.empty:
                 pivot_m = m_att_records.pivot(index=["employee_code", "name"], columns="status", values="count").fillna(0)
                 st.dataframe(pivot_m, use_container_width=True)
-                st.download_button("📥 Download Monthly Attendance (CSV)", pivot_m.to_csv().encode('utf-8'), f"monthly_attendance_{m_year}_{m_month}.csv", "text/csv")
+                st.download_button("📥 Download Monthly Attendance (CSV)", pivot_m.to_csv().encode('utf-8'), f"monthly_attendance_{r4_city}_{m_year}_{m_month}.csv", "text/csv")
             else:
-                st.info("No monthly attendance records found.")
+                st.info("No monthly attendance records found for this selection.")
         except Exception:
             st.info("No monthly attendance records found.")
 
