@@ -1,17 +1,12 @@
 import calendar
+import csv
 import hashlib
 import sqlite3
 from datetime import date, datetime, timedelta
-from io import BytesIO
+from io import StringIO
 
 import pandas as pd
 import streamlit as st
-
-# ReportLab Exports
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIG & CUSTOM STYLING
@@ -43,7 +38,7 @@ st.markdown(
 
 
 # -----------------------------------------------------------------------------
-# 2. DATABASE INITIALIZATION (EXACT MODELS SCHEMA)
+# 2. DATABASE INITIALIZATION
 # -----------------------------------------------------------------------------
 def get_db():
     conn = sqlite3.connect("clinic.db", check_same_thread=False)
@@ -137,7 +132,6 @@ def init_db():
         FOREIGN KEY(staff_id) REFERENCES staff(id)
     )""")
 
-    # Default Admin Setup
     c.execute("SELECT * FROM user WHERE username='admin'")
     if not c.fetchone():
         hashed_pw = hashlib.sha256("admin123".encode()).hexdigest()
@@ -182,7 +176,7 @@ def get_patients_dropdown():
 
 
 # -----------------------------------------------------------------------------
-# 4. AUTHENTICATION & SESSION
+# 4. AUTHENTICATION
 # -----------------------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -673,55 +667,18 @@ elif choice == "Reports & Analytics":
     fees_data = pd.read_sql(fee_query, conn, params=params)
     st.dataframe(fees_data, use_container_width=True)
 
-    # Exports
-    col_e1, col_e2, col_e3 = st.columns(3)
+    col_e1, col_e2 = st.columns(2)
 
-    # Excel Fee Export
+    # CSV Fee Export
     if not fees_data.empty:
-        buffer_xls = BytesIO()
-        with pd.ExcelWriter(buffer_xls, engine="openpyxl") as writer:
-            fees_data.to_excel(writer, index=False, sheet_name="Fee Report")
-        buffer_xls.seek(0)
-        col_e1.download_button("📊 Export Fees (Excel)", data=buffer_xls, file_name="fee_report.xlsx")
+        csv_buffer = fees_data.to_csv(index=False).encode('utf-8')
+        col_e1.download_button("📥 Export Fees (CSV)", data=csv_buffer, file_name="fee_report.csv", mime="text/csv")
 
-    # PDF Fee Export
-    if not fees_data.empty:
-        buffer_pdf = BytesIO()
-        doc = SimpleDocTemplate(buffer_pdf, pagesize=A4)
-        styles = getSampleStyleSheet()
-        elements = [Paragraph("SN Clinic - Fee Collection Report", styles["Title"]), Spacer(1, 12)]
-
-        data = [["Date", "Patient", "Consult", "Med Fee", "Discount", "Total", "Mode"]]
-        for _, row in fees_data.iterrows():
-            data.append([
-                str(row["paid_on"])[:10],
-                str(row["patient_name"]),
-                f"Rs.{row['consultation_fee']:.0f}",
-                f"Rs.{row['medicine_fee']:.0f}",
-                f"Rs.{row['discount']:.0f}",
-                f"Rs.{row['total']:.0f}",
-                str(row["payment_mode"]),
-            ])
-
-        t = Table(data, repeatRows=1)
-        t.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e40af")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-        ]))
-        elements.append(t)
-        doc.build(elements)
-        buffer_pdf.seek(0)
-        col_e2.download_button("📄 Export Fees (PDF)", data=buffer_pdf, file_name="fee_report.pdf")
-
-    # Excel Patients Export
+    # CSV Patients Export
     p_all = pd.read_sql("SELECT * FROM patient", conn)
     if not p_all.empty:
-        buffer_p = BytesIO()
-        with pd.ExcelWriter(buffer_p, engine="openpyxl") as writer:
-            p_all.to_excel(writer, index=False, sheet_name="Patients")
-        buffer_p.seek(0)
-        col_e3.download_button("👥 Export All Patients (Excel)", data=buffer_p, file_name="patient_list.xlsx")
+        p_csv_buffer = p_all.to_csv(index=False).encode('utf-8')
+        col_e2.download_button("👥 Export All Patients (CSV)", data=p_csv_buffer, file_name="patient_list.csv", mime="text/csv")
 
 # -----------------------------------------------------------------------------
 # MODULE 10: USERS MANAGEMENT
