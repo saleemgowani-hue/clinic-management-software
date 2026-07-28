@@ -22,7 +22,7 @@ st.markdown(
     """
     <style>
     div[data-testid="stForm"], div.stTextInput {
-        max-width: 500px !important;
+        max-width: 600px !important;
         margin: 0 auto;
     }
     .stMetric {
@@ -146,10 +146,9 @@ def init_db():
         FOREIGN KEY(staff_id) REFERENCES staff(id)
     )""")
 
-    # AUTOMATIC COLUMN CHECK & FIX FOR STAFF TABLE
+    # AUTOMATIC COLUMN CHECK FOR TABLES
     c.execute("PRAGMA table_info(staff)")
     staff_cols = [col[1] for col in c.fetchall()]
-    
     if "status" not in staff_cols:
         c.execute("ALTER TABLE staff ADD COLUMN status TEXT DEFAULT 'Active'")
     if "center_id" not in staff_cols:
@@ -157,7 +156,6 @@ def init_db():
     if "created_at" not in staff_cols:
         c.execute("ALTER TABLE staff ADD COLUMN created_at TEXT")
 
-    # AUTOMATIC COLUMN CHECK FOR OTHER TABLES
     c.execute("PRAGMA table_info(patient)")
     patient_cols = [col[1] for col in c.fetchall()]
     if "center_id" not in patient_cols:
@@ -265,7 +263,7 @@ def get_user_city(center_id):
 
 
 # -----------------------------------------------------------------------------
-# 4. AUTHENTICATION (LOGIN & SIGN UP)
+# 4. AUTHENTICATION
 # -----------------------------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
@@ -281,7 +279,6 @@ if not st.session_state["logged_in"]:
     with col2:
         auth_tab1, auth_tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
 
-        # TAB 1: LOGIN
         with auth_tab1:
             st.subheader("Login to System")
             user_input = st.text_input("Username", key="login_user")
@@ -306,7 +303,6 @@ if not st.session_state["logged_in"]:
                 else:
                     st.error("Invalid Username or Password")
 
-        # TAB 2: SIGN UP
         with auth_tab2:
             st.subheader("Create New Account")
             signup_user = st.text_input("Choose Username *", key="su_user").strip()
@@ -339,12 +335,11 @@ if not st.session_state["logged_in"]:
 
 
 # -----------------------------------------------------------------------------
-# 5. SIDEBAR NAVIGATION & CITY FILTER
+# 5. SIDEBAR NAVIGATION
 # -----------------------------------------------------------------------------
 st.sidebar.title("🏥 SN Clinic")
 st.sidebar.write(f"Logged in: **{st.session_state['username']}** (`{st.session_state['role']}`)")
 
-# GLOBAL CITY FILTER FOR ADMIN AND HR
 selected_city = "All Cities"
 if st.session_state["role"] in ["admin", "hr"]:
     all_cities = get_unique_cities()
@@ -436,12 +431,12 @@ if choice == "Dashboard":
         st.info("No appointments found.")
 
 # -----------------------------------------------------------------------------
-# MODULE 2: PATIENTS
+# MODULE 2: PATIENTS (WITH EDIT FUNCTIONALITY)
 # -----------------------------------------------------------------------------
 elif choice == "Patients":
     st.title("👨‍👩‍👧‍👦 Patient Management")
 
-    t1, t2 = st.tabs(["📋 Patients List", "➕ Register New Patient"])
+    t1, t2, t3 = st.tabs(["📋 Patients List", "➕ Register New Patient", "✏️ Edit Patient Details"])
 
     with t1:
         q = st.text_input("🔍 Search Patient by Name, Mobile or Code", "")
@@ -469,7 +464,7 @@ elif choice == "Patients":
         st.subheader("📄 Patient Detail View")
         patient_map = get_patients_dropdown()
         if patient_map:
-            selected_pid = st.selectbox("Select Patient to view history", options=list(patient_map.keys()), format_func=lambda x: patient_map[x])
+            selected_pid = st.selectbox("Select Patient to view history", options=list(patient_map.keys()), format_func=lambda x: patient_map[x], key="pt_hist_sel")
             p = conn.execute("SELECT * FROM patient WHERE id=?", (selected_pid,)).fetchone()
 
             if p:
@@ -526,13 +521,46 @@ elif choice == "Patients":
                 else:
                     st.error("Patient Name is required!")
 
+    with t3:
+        st.subheader("✏️ Edit Patient Details")
+        patient_map = get_patients_dropdown()
+        if patient_map:
+            edit_pid = st.selectbox("Select Patient to Edit", options=list(patient_map.keys()), format_func=lambda x: patient_map[x], key="edit_pt_sel")
+            p_data = conn.execute("SELECT * FROM patient WHERE id=?", (edit_pid,)).fetchone()
+            centers_map = get_centers_dropdown()
+
+            if p_data:
+                with st.form("edit_p_form"):
+                    e_name = st.text_input("Full Name *", value=p_data["name"])
+                    e_gname = st.text_input("Guardian Name", value=p_data["guardian_name"] or "")
+                    ec1, ec2 = st.columns(2)
+                    e_age = ec1.number_input("Age", min_value=0, max_value=120, value=p_data["age"] or 0)
+                    gender_opts = ["Male", "Female", "Other"]
+                    e_gender = ec2.selectbox("Gender", gender_opts, index=gender_opts.index(p_data["gender"]) if p_data["gender"] in gender_opts else 0)
+                    e_mobile = st.text_input("Mobile Number", value=p_data["mobile"] or "")
+                    e_address = st.text_area("Address", value=p_data["address"] or "")
+                    
+                    ctr_keys = list(centers_map.keys())
+                    c_idx = ctr_keys.index(p_data["center_id"]) if p_data["center_id"] in ctr_keys else 0
+                    e_ctr = st.selectbox("Assign Center / Branch", options=ctr_keys, format_func=lambda x: centers_map[x], index=c_idx) if centers_map else None
+
+                    col_u1, col_u2 = st.columns([1, 1])
+                    if col_u1.form_submit_button("Update Patient Info"):
+                        conn.execute(
+                            "UPDATE patient SET name=?, guardian_name=?, age=?, gender=?, mobile=?, address=?, center_id=? WHERE id=?",
+                            (e_name, e_gname, e_age if e_age > 0 else None, e_gender, e_mobile, e_address, e_ctr, edit_pid),
+                        )
+                        conn.commit()
+                        st.success("Patient details updated successfully!")
+                        st.rerun()
+
 # -----------------------------------------------------------------------------
-# MODULE 3: APPOINTMENTS
+# MODULE 3: APPOINTMENTS (EDIT ADDED, DEFAULT DR. SHARMA REMOVED)
 # -----------------------------------------------------------------------------
 elif choice == "Appointments":
     st.title("📅 Appointments Management")
 
-    t1, t2 = st.tabs(["📋 All Appointments", "➕ Book Appointment"])
+    t1, t2, t3 = st.tabs(["📋 All Appointments", "➕ Book Appointment", "✏️ Edit Appointment"])
 
     with t1:
         try:
@@ -551,7 +579,7 @@ elif choice == "Appointments":
 
             if not appts_df.empty:
                 st.markdown("---")
-                st.subheader("⚡ Quick Actions")
+                st.subheader("⚡ Quick Status Update")
                 col_a, col_b = st.columns(2)
                 aid = col_a.selectbox("Select Appointment ID", options=appts_df["id"].tolist())
                 new_status = col_b.selectbox("Change Status", ["Booked", "Completed", "Cancelled"])
@@ -568,7 +596,7 @@ elif choice == "Appointments":
         if patients_map:
             with st.form("book_appt"):
                 pid = st.selectbox("Select Patient", options=list(patients_map.keys()), format_func=lambda x: patients_map[x])
-                doc = st.text_input("Doctor Name", "Dr. Sharma")
+                doc = st.text_input("Doctor Name", "") # Default Dr Sharma REMOVED
                 col1, col2 = st.columns(2)
                 adate = col1.date_input("Appointment Date", date.today())
                 atime = col2.time_input("Appointment Time")
@@ -584,8 +612,36 @@ elif choice == "Appointments":
         else:
             st.warning("Please register a patient first.")
 
+    with t3:
+        st.subheader("✏️ Edit Appointment Details")
+        all_appts = conn.execute("""SELECT a.id, a.doctor_name, a.appt_date, a.appt_time, a.status, p.name 
+                                    FROM appointment a JOIN patient p ON a.patient_id=p.id ORDER BY a.id DESC""").fetchall()
+        if all_appts:
+            appt_dict = {a["id"]: f"ID #{a['id']} - {a['name']} ({a['appt_date']})" for a in all_appts}
+            sel_aid = st.selectbox("Select Appointment to Edit", options=list(appt_dict.keys()), format_func=lambda x: appt_dict[x])
+            a_data = conn.execute("SELECT * FROM appointment WHERE id=?", (sel_aid,)).fetchone()
+
+            if a_data:
+                with st.form("edit_appt_form"):
+                    e_doc = st.text_input("Doctor Name", value=a_data["doctor_name"] or "")
+                    ec1, ec2 = st.columns(2)
+                    
+                    try:
+                        curr_d = datetime.strptime(a_data["appt_date"], "%Y-%m-%d").date()
+                    except Exception:
+                        curr_d = date.today()
+
+                    e_date = ec1.date_input("Appointment Date", curr_d)
+                    e_status = ec2.selectbox("Status", ["Booked", "Completed", "Cancelled"], index=["Booked", "Completed", "Cancelled"].index(a_data["status"]) if a_data["status"] in ["Booked", "Completed", "Cancelled"] else 0)
+
+                    if st.form_submit_button("Update Appointment"):
+                        conn.execute("UPDATE appointment SET doctor_name=?, appt_date=?, status=? WHERE id=?", (e_doc, str(e_date), e_status, sel_aid))
+                        conn.commit()
+                        st.success("Appointment updated successfully!")
+                        st.rerun()
+
 # -----------------------------------------------------------------------------
-# MODULE 4: FOLLOW-UPS (UPDATED: SHOW TODAY AND FUTURE FOLLOW-UPS)
+# MODULE 4: FOLLOW-UPS
 # -----------------------------------------------------------------------------
 elif choice == "Follow-ups":
     st.title("🔄 Upcoming & Due Follow-ups Tracking")
@@ -612,7 +668,6 @@ elif choice == "Follow-ups":
         st.subheader("📅 Scheduled Follow-up Visits (Today & Future)")
         
         if not followups_df.empty:
-            # Re-ordering columns for better presentation
             followups_df = followups_df[[
                 "next_visit", "patient_code", "patient_name", "mobile", 
                 "center_name", "city", "diagnosis", "symptoms", "prescription"
@@ -664,12 +719,12 @@ elif choice == "Follow-ups":
         st.info("No follow-up records found.")
 
 # -----------------------------------------------------------------------------
-# MODULE 5: FEES & BILLING
+# MODULE 5: FEES & BILLING (WITH EDIT & DELETE OPTIONS)
 # -----------------------------------------------------------------------------
 elif choice == "Fees & Billing":
     st.title("💳 Fees & Billing Collection")
 
-    t1, t2 = st.tabs(["📜 Collection Records", "🧾 Add Fee / Invoice"])
+    t1, t2, t3 = st.tabs(["📜 Collection Records", "🧾 Add Fee / Invoice", "✏️ Edit / Delete Fee Record"])
 
     with t1:
         try:
@@ -710,6 +765,43 @@ elif choice == "Fees & Billing":
                     st.success(f"Fee of ₹{net_total} collected successfully!")
                     st.rerun()
 
+    with t3:
+        st.subheader("✏️ Edit or Delete Fee Collection Record")
+        all_fees = conn.execute("""SELECT f.id, f.paid_on, f.total, p.name 
+                                  FROM fee f JOIN patient p ON f.patient_id=p.id ORDER BY f.id DESC""").fetchall()
+        if all_fees:
+            fee_dict = {f["id"]: f"ID #{f['id']} - {f['name']} (₹{f['total']}) on {f['paid_on']}" for f in all_fees}
+            sel_fid = st.selectbox("Select Fee Record to Edit/Delete", options=list(fee_dict.keys()), format_func=lambda x: fee_dict[x])
+            f_data = conn.execute("SELECT * FROM fee WHERE id=?", (sel_fid,)).fetchone()
+
+            if f_data:
+                with st.form("edit_fee_form"):
+                    fc1, fc2, fc3 = st.columns(3)
+                    e_cf = fc1.number_input("Consultation Fee (₹)", min_value=0.0, value=float(f_data["consultation_fee"] or 0))
+                    e_mf = fc2.number_input("Medicine Fee (₹)", min_value=0.0, value=float(f_data["medicine_fee"] or 0))
+                    e_disc = fc3.number_input("Discount (₹)", min_value=0.0, value=float(f_data["discount"] or 0))
+                    
+                    modes = ["Cash", "UPI", "Card", "Net Banking"]
+                    e_mode = st.selectbox("Payment Mode", modes, index=modes.index(f_data["payment_mode"]) if f_data["payment_mode"] in modes else 0)
+
+                    col_f1, col_f2 = st.columns([1, 1])
+                    if col_f1.form_submit_button("Update Fee Record"):
+                        e_total = (e_cf + e_mf) - e_disc
+                        conn.execute(
+                            "UPDATE fee SET consultation_fee=?, medicine_fee=?, discount=?, total=?, payment_mode=? WHERE id=?",
+                            (e_cf, e_mf, e_disc, e_total, e_mode, sel_fid),
+                        )
+                        conn.commit()
+                        st.success("Fee record updated successfully!")
+                        st.rerun()
+
+                st.markdown("---")
+                if st.button("🗑️ Delete Selected Fee Record", type="primary"):
+                    conn.execute("DELETE FROM fee WHERE id=?", (sel_fid,))
+                    conn.commit()
+                    st.success("Fee record deleted!")
+                    st.rerun()
+
 # -----------------------------------------------------------------------------
 # MODULE 6: MEDICINES INVENTORY
 # -----------------------------------------------------------------------------
@@ -741,12 +833,12 @@ elif choice == "Medicines Inventory":
                     st.rerun()
 
 # -----------------------------------------------------------------------------
-# MODULE 7: STAFF DIRECTORY
+# MODULE 7: STAFF DIRECTORY (WITH EDIT FUNCTIONALITY)
 # -----------------------------------------------------------------------------
 elif choice == "Staff Directory":
     st.title("👨‍⚕️ Staff & Employee Management")
 
-    t1, t2 = st.tabs(["👥 Staff Directory", "➕ Add Staff Member"])
+    t1, t2, t3 = st.tabs(["👥 Staff Directory", "➕ Add Staff Member", "✏️ Edit Staff Details"])
 
     with t1:
         try:
@@ -807,16 +899,59 @@ elif choice == "Staff Directory":
                 else:
                     st.error("Staff Name is required!")
 
+    with t3:
+        st.subheader("✏️ Edit Staff Member Details")
+        all_staff = conn.execute("SELECT id, employee_code, name FROM staff ORDER BY name").fetchall()
+        if all_staff:
+            s_map = {s["id"]: f"{s['name']} ({s['employee_code']})" for s in all_staff}
+            edit_sid = st.selectbox("Select Staff Member to Edit", options=list(s_map.keys()), format_func=lambda x: s_map[x])
+            s_data = conn.execute("SELECT * FROM staff WHERE id=?", (edit_sid,)).fetchone()
+            centers_map = get_centers_dropdown()
+
+            if s_data:
+                with st.form("edit_staff_form"):
+                    es_name = st.text_input("Full Name *", value=s_data["name"])
+                    es_desig = st.text_input("Designation", value=s_data["designation"] or "")
+                    sc1, sc2 = st.columns(2)
+                    es_mobile = sc1.text_input("Mobile", value=s_data["mobile"] or "")
+                    es_city = sc2.text_input("City", value=s_data["city"] or "")
+                    es_address = st.text_area("Address", value=s_data["address"] or "")
+                    
+                    sc3, sc4 = st.columns(2)
+                    try:
+                        curr_jdate = datetime.strptime(s_data["joining_date"], "%Y-%m-%d").date()
+                    except Exception:
+                        curr_jdate = date.today()
+
+                    es_jdate = sc3.date_input("Joining Date", curr_jdate)
+                    es_salary = sc4.number_input("Salary (₹)", min_value=0.0, value=float(s_data["salary"] or 0))
+                    
+                    st_opts = ["Active", "Inactive"]
+                    es_status = st.selectbox("Status", st_opts, index=st_opts.index(s_data["status"]) if s_data["status"] in st_opts else 0)
+
+                    ctr_keys = list(centers_map.keys())
+                    c_idx = ctr_keys.index(s_data["center_id"]) if s_data["center_id"] in ctr_keys else 0
+                    es_ctr = st.selectbox("Assign Center / Branch", options=ctr_keys, format_func=lambda x: centers_map[x], index=c_idx) if centers_map else None
+
+                    if st.form_submit_button("Update Staff Details"):
+                        conn.execute(
+                            """UPDATE staff SET name=?, designation=?, mobile=?, city=?, address=?, joining_date=?, salary=?, status=?, center_id=? WHERE id=?""",
+                            (es_name, es_desig, es_mobile, es_city, es_address, str(es_jdate), es_salary, es_status, es_ctr, edit_sid),
+                        )
+                        conn.commit()
+                        st.success("Staff details updated successfully!")
+                        st.rerun()
+
 # -----------------------------------------------------------------------------
-# MODULE 8: DAILY ATTENDANCE
+# MODULE 8: DAILY ATTENDANCE (WITH EDIT / OVERWRITE OPTION)
 # -----------------------------------------------------------------------------
 elif choice == "Daily Attendance":
     st.title("📅 Daily Staff Attendance & Monthly Summary")
 
-    t1, t2 = st.tabs(["✍️ Mark Daily Attendance", "📊 Attendance Report"])
+    t1, t2 = st.tabs(["✍️ Mark / Edit Daily Attendance", "📊 Attendance Report"])
 
     with t1:
-        att_date = st.date_input("Select Attendance Date", date.today())
+        att_date = st.date_input("Select Attendance Date to Mark or Edit", date.today())
         active_staff = conn.execute("SELECT * FROM staff WHERE status='Active' ORDER BY name").fetchall()
 
         if active_staff:
@@ -825,8 +960,11 @@ elif choice == "Daily Attendance":
                 for a in conn.execute("SELECT * FROM attendance WHERE att_date=?", (str(att_date),)).fetchall()
             }
 
+            if existing_marks:
+                st.info(f"ℹ️ Attendance already recorded for {att_date.strftime('%d-%b-%Y')}. You can modify and save changes below.")
+
             with st.form("mark_att"):
-                st.write(f"Marking attendance for: **{att_date.strftime('%d-%b-%Y')}**")
+                st.write(f"Marking/Editing attendance for: **{att_date.strftime('%d-%b-%Y')}**")
                 marks = {}
                 for s in active_staff:
                     default_idx = ["Present", "Absent", "Half Day", "Leave"].index(existing_marks.get(s["id"], "Present"))
@@ -837,12 +975,12 @@ elif choice == "Daily Attendance":
                         key=f"att_{s['id']}",
                     )
 
-                if st.form_submit_button("Save Attendance"):
+                if st.form_submit_button("Update / Save Attendance"):
                     for sid, status in marks.items():
                         conn.execute("DELETE FROM attendance WHERE staff_id=? AND att_date=?", (sid, str(att_date)))
                         conn.execute("INSERT INTO attendance (staff_id, att_date, status) VALUES (?, ?, ?)", (sid, str(att_date), status))
                     conn.commit()
-                    st.success("Attendance saved successfully!")
+                    st.success(f"Attendance updated successfully for {att_date}!")
                     st.rerun()
         else:
             st.info("No active staff members found.")
