@@ -1,6 +1,7 @@
 import calendar
 import csv
 import hashlib
+import secrets
 import sqlite3
 from datetime import date, datetime, timedelta
 from io import StringIO
@@ -58,9 +59,35 @@ st.markdown(
 # 2. DATABASE INITIALIZATION & AUTO-MIGRATIONS
 # -----------------------------------------------------------------------------
 def get_db():
-    conn = sqlite3.connect("clinic.db", check_same_thread=False)
+    conn = sqlite3.connect("clinic.db", check_same_thread=False, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+def hash_pass(password, salt=None):
+    """PBKDF2-HMAC-SHA256 with a random per-user salt. Returns 'salt$hash'."""
+    if salt is None:
+        salt = secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 200_000)
+    return f"{salt}${dk.hex()}"
+
+
+def verify_pass(password, stored_hash):
+    """Verify a password against a stored hash. Supports legacy unsalted
+    SHA-256 hashes (no '$') and upgrades them transparently on success."""
+    if not stored_hash:
+        return False, None
+    if "$" in stored_hash:
+        salt, _ = stored_hash.split("$", 1)
+        candidate = hash_pass(password, salt)
+        return (candidate == stored_hash), None
+    # Legacy unsalted sha256 hash - verify, then signal an upgrade is needed
+    legacy = hashlib.sha256(password.encode()).hexdigest()
+    if legacy == stored_hash:
+        return True, hash_pass(password)  # new hash to store
+    return False, None
 
 
 def init_db():
@@ -191,13 +218,21 @@ def init_db():
             (datetime.now().strftime("%Y-%m-%d %H:%M:%S"),)
         )
 
+    c.execute("PRAGMA table_info(user)")
+    user_cols_init = [col[1] for col in c.fetchall()]
+    if "is_approved" not in user_cols_init:
+        c.execute("ALTER TABLE user ADD COLUMN is_approved INTEGER DEFAULT 0")
+
     c.execute("SELECT * FROM user WHERE username='admin'")
     if not c.fetchone():
-        hashed_pw = hashlib.sha256("admin123".encode()).hexdigest()
+        hashed_pw = hash_pass("admin123")
         c.execute(
-            "INSERT INTO user (username, password_hash, role) VALUES ('admin', ?, 'admin')",
+            "INSERT INTO user (username, password_hash, role, is_approved) VALUES ('admin', ?, 'admin', 1)",
             (hashed_pw,),
         )
+    else:
+        # Make sure a pre-existing admin account is always approved/usable
+        c.execute("UPDATE user SET is_approved=1 WHERE username='admin'")
 
     conn.commit()
     conn.close()
@@ -209,10 +244,6 @@ init_db()
 # -----------------------------------------------------------------------------
 # 3. HELPER FUNCTIONS
 # -----------------------------------------------------------------------------
-def hash_pass(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-
 def next_patient_code():
     conn = get_db()
     count = conn.execute("SELECT COUNT(*) FROM patient").fetchone()[0] + 1
@@ -301,12 +332,25 @@ if not st.session_state["logged_in"]:
             if st.button("Login", use_container_width=True, key="login_btn"):
                 conn = get_db()
                 user = conn.execute(
-                    "SELECT * FROM user WHERE username=? AND password_hash=?",
-                    (user_input.strip(), hash_pass(pass_input)),
+                    "SELECT * FROM user WHERE username=?",
+                    (user_input.strip(),),
                 ).fetchone()
-                conn.close()
 
+                ok, upgraded_hash = (False, None)
                 if user:
+                    ok, upgraded_hash = verify_pass(pass_input, user["password_hash"])
+
+                if not ok:
+                    conn.close()
+                    st.error("Invalid Username or Password")
+                elif not user["is_approved"]:
+                    conn.close()
+                    st.warning("Your account is awaiting admin approval before you can log in.")
+                else:
+                    if upgraded_hash:
+                        conn.execute("UPDATE user SET password_hash=? WHERE id=?", (upgraded_hash, user["id"]))
+                        conn.commit()
+                    conn.close()
                     st.session_state["logged_in"] = True
                     st.session_state["user_id"] = user["id"]
                     st.session_state["username"] = user["username"]
@@ -314,32 +358,36 @@ if not st.session_state["logged_in"]:
                     st.session_state["center_id"] = user["center_id"] if "center_id" in user.keys() else None
                     st.success("Login Successful!")
                     st.rerun()
-                else:
-                    st.error("Invalid Username or Password")
 
         with auth_tab2:
             st.subheader("Create New Account")
             signup_user = st.text_input("Choose Username *", key="su_user").strip()
             signup_pass = st.text_input("Choose Password *", type="password", key="su_pass")
             signup_conf = st.text_input("Confirm Password *", type="password", key="su_conf")
-            signup_role = st.selectbox("Role", ["receptionist", "doctor", "hr", "admin"], key="su_role")
+            # NOTE: "admin" is intentionally not selectable here - admin
+            # accounts can only be granted by an existing admin from the
+            # Users Management screen, to prevent self-service privilege
+            # escalation.
+            signup_role = st.selectbox("Role", ["receptionist", "doctor", "hr"], key="su_role")
             centers_map = get_centers_dropdown()
             signup_center = st.selectbox("Select Center/Branch", options=list(centers_map.keys()), format_func=lambda x: centers_map[x], key="su_center") if centers_map else None
 
             if st.button("Sign Up", use_container_width=True, key="signup_btn"):
                 if not signup_user or not signup_pass:
                     st.error("Username and password are required!")
+                elif len(signup_pass) < 8:
+                    st.error("Password must be at least 8 characters long.")
                 elif signup_pass != signup_conf:
                     st.error("Passwords do not match!")
                 else:
                     conn = get_db()
                     try:
                         conn.execute(
-                            "INSERT INTO user (username, password_hash, role, center_id) VALUES (?, ?, ?, ?)",
+                            "INSERT INTO user (username, password_hash, role, center_id, is_approved) VALUES (?, ?, ?, ?, 0)",
                             (signup_user, hash_pass(signup_pass), signup_role, signup_center),
                         )
                         conn.commit()
-                        st.success(f"Account for '{signup_user}' created successfully! You can now login.")
+                        st.success(f"Account request for '{signup_user}' submitted! An administrator must approve your account before you can log in.")
                     except sqlite3.IntegrityError:
                         st.error("That username is already taken. Please choose another.")
                     finally:
@@ -362,7 +410,7 @@ if st.session_state["role"] in ["admin", "hr"]:
 else:
     selected_city = get_user_city(st.session_state["center_id"])
 
-menu = [
+ALL_MENU_ITEMS = [
     "Dashboard",
     "Patients",
     "Appointments",
@@ -376,6 +424,15 @@ menu = [
     "Users Management",
 ]
 
+# Role -> menu items visible to that role. Admin sees everything.
+ROLE_MENU = {
+    "admin": ALL_MENU_ITEMS,
+    "doctor": ["Dashboard", "Patients", "Appointments", "Follow-ups", "Reports & Analytics"],
+    "receptionist": ["Dashboard", "Patients", "Appointments", "Follow-ups", "Fees & Billing", "Medicines Inventory"],
+    "hr": ["Dashboard", "Staff Directory", "Daily Attendance", "Center Management", "Reports & Analytics"],
+}
+
+menu = ROLE_MENU.get(st.session_state["role"], ["Dashboard"])
 choice = st.sidebar.radio("Navigation", menu)
 
 st.sidebar.markdown("---")
@@ -1109,10 +1166,14 @@ elif choice == "Reports & Analytics":
 
     with r3:
         st.subheader("📥 Export Tables to CSV")
-        table_opt = st.selectbox("Select Table to Export", ["patient", "appointment", "consultation", "fee", "medicine", "staff", "attendance", "center"])
+        EXPORTABLE_TABLES = ["patient", "appointment", "consultation", "fee", "medicine", "staff", "attendance", "center"]
+        table_opt = st.selectbox("Select Table to Export", EXPORTABLE_TABLES)
         if st.button("Generate Download Link"):
-            exp_df = pd.read_sql(f"SELECT * FROM {table_opt}", conn)
-            st.download_button(f"Download {table_opt}.csv", exp_df.to_csv(index=False).encode('utf-8'), f"{table_opt}_export.csv", "text/csv")
+            if table_opt not in EXPORTABLE_TABLES:
+                st.error("Invalid table selection.")
+            else:
+                exp_df = pd.read_sql(f"SELECT * FROM {table_opt}", conn)  # nosec - table_opt is whitelist-checked above
+                st.download_button(f"Download {table_opt}.csv", exp_df.to_csv(index=False).encode('utf-8'), f"{table_opt}_export.csv", "text/csv")
 
 # -----------------------------------------------------------------------------
 # MODULE 11: USERS MANAGEMENT
@@ -1123,9 +1184,42 @@ elif choice == "Users Management":
     if st.session_state["role"] != "admin":
         st.error("Access Denied: Only Administrator account can access User Management.")
     else:
-        users_df = pd.read_sql("""SELECT u.id, u.username, u.role, c.name as center_name, c.city 
+        users_df = pd.read_sql("""SELECT u.id, u.username, u.role, u.is_approved, c.name as center_name, c.city 
                                   FROM user u LEFT JOIN center c ON u.center_id=c.id ORDER BY u.id ASC""", conn)
         st.dataframe(users_df, use_container_width=True)
+
+        pending = conn.execute("SELECT id, username, role FROM user WHERE is_approved=0 OR is_approved IS NULL").fetchall()
+        if pending:
+            st.markdown("---")
+            st.subheader("⏳ Pending Account Approvals")
+            for pu in pending:
+                pc1, pc2, pc3 = st.columns([3, 2, 2])
+                pc1.write(f"**{pu['username']}** requested role: `{pu['role']}`")
+                if pc2.button("✅ Approve", key=f"approve_{pu['id']}"):
+                    conn.execute("UPDATE user SET is_approved=1 WHERE id=?", (pu["id"],))
+                    conn.commit()
+                    st.success(f"Approved {pu['username']}")
+                    st.rerun()
+                if pc3.button("🗑️ Reject", key=f"reject_{pu['id']}"):
+                    conn.execute("DELETE FROM user WHERE id=?", (pu["id"],))
+                    conn.commit()
+                    st.warning(f"Rejected and removed {pu['username']}")
+                    st.rerun()
+
+        st.markdown("---")
+        st.subheader("🛡️ Change User Role")
+        role_user_list = {u["id"]: u["username"] for u in conn.execute("SELECT id, username FROM user").fetchall()}
+        if role_user_list:
+            role_sel_u = st.selectbox("Select User", options=list(role_user_list.keys()), format_func=lambda x: role_user_list[x], key="role_change_sel")
+            new_role = st.selectbox("New Role", ["admin", "doctor", "receptionist", "hr"], key="role_change_val")
+            if st.button("Update Role"):
+                if role_sel_u == st.session_state["user_id"] and new_role != "admin":
+                    st.error("You cannot remove your own admin role.")
+                else:
+                    conn.execute("UPDATE user SET role=? WHERE id=?", (new_role, role_sel_u))
+                    conn.commit()
+                    st.success(f"Role for {role_user_list[role_sel_u]} updated to {new_role}.")
+                    st.rerun()
 
         st.markdown("---")
         st.subheader("🔑 Reset User Password")
@@ -1134,11 +1228,11 @@ elif choice == "Users Management":
         new_pass = st.text_input("New Password", type="password")
 
         if st.button("Change Password"):
-            if new_pass.strip():
+            if len(new_pass.strip()) < 8:
+                st.error("Password must be at least 8 characters long.")
+            else:
                 conn.execute("UPDATE user SET password_hash=? WHERE id=?", (hash_pass(new_pass.strip()), sel_u))
                 conn.commit()
                 st.success(f"Password for {user_list[sel_u]} updated successfully!")
-            else:
-                st.error("Password cannot be empty.")
 
 conn.close()
