@@ -144,3 +144,43 @@ whether `DATABASE_URL` is set — the rest of the application has no idea
 which backend it's talking to. This is also why `db_postgres.py` and
 `migrate_to_online.py` aren't included in the Offline ZIP: they depend
 on `psycopg2`, which isn't needed there.
+
+
+## Demo Account (self-resetting sandbox)
+
+A permanently available demo login is provisioned automatically on first
+run — no setup needed:
+
+```
+Username: demo
+Password: demo123
+```
+
+It logs into its own isolated tenant (`DEMO01`, "Demo Clinic"), pre-loaded
+with 24 patients, 4 staff, medicines, appointments, consultations, bills,
+attendance and expenses.
+
+Two things make it safe to hand out publicly:
+
+1. **Everything expires.** Any record a visitor creates is deleted on the
+   first page load after 60 minutes, and the standard sample set is
+   re-seeded. The check is lazy (on page load) — there is no cron job or
+   background worker to deploy. Change the window via `DEMO_TTL_MINUTES`
+   in `demo_sandbox.py`.
+2. **The password is locked.** The account is flagged `is_demo_account=1`,
+   which disables self-service password change, blocks the Admin "Reset
+   Password" button, and hides the demo toggle from clinic Admins — only
+   the Super Admin can lift the lock.
+
+Because the demo is a normal tenant, a visitor sees only demo data. No
+real clinic's records are reachable from it.
+
+## Security notes before going public
+
+- **Do not commit `License_Keys.txt`** to a public repository — those keys
+  activate paid clinics. Keep it out of the repo (or keep the repo private).
+- **Change the default `admin` / `admin123` password immediately** after the
+  first deploy, from the sidebar → "🔑 Change My Password".
+- There is no "Join Existing Clinic" signup. New logins can only be created
+  by a clinic's own Admin from Users Management, so nobody can pick a clinic
+  off a list and grant themselves access.

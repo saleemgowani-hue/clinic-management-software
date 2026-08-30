@@ -200,6 +200,8 @@ _TABLES_SQL = [
         plan TEXT DEFAULT 'Trial',
         plan_expiry TEXT,
         is_active INTEGER DEFAULT 1,
+        is_demo_center INTEGER DEFAULT 0,
+        demo_reset_at TEXT,
         created_at TEXT,
         pending_plan TEXT,
         razorpay_link_id TEXT,
@@ -518,6 +520,8 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 # whenever a column is added to a table that may already exist in the wild.
 _COLUMN_MIGRATIONS = [
     ('"user"', "is_demo_account", "INTEGER DEFAULT 0"),
+    ("center", "is_demo_center", "INTEGER DEFAULT 0"),
+    ("center", "demo_reset_at", "TEXT"),
 ]
 
 

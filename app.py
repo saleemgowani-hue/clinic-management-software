@@ -19,6 +19,7 @@ import billing
 import licensing as lic
 import whatsapp as wa
 import demo_data as dd
+import demo_sandbox as sandbox
 
 # -----------------------------------------------------------------------------
 # 1. PAGE CONFIG & STYLING
@@ -135,6 +136,10 @@ st.markdown(
 
 db.init_db()
 
+# Provision the self-resetting Demo clinic (center DEMO01, login demo/demo123).
+# Idempotent — it only creates anything the very first time the app runs.
+sandbox.ensure_demo_account()
+
 
 def colored_metric(container, label, value, color, delta=None, icon=""):
     """Renders a professional colorful metric card (used on the Dashboard)."""
@@ -204,6 +209,13 @@ if not st.session_state["logged_in"]:
             st.subheader("Login to System")
             user_input = st.text_input("Username", key="login_user")
             pass_input = st.text_input("Password", type="password", key="login_pass")
+
+            st.info(
+                f"**Just want a look around?** Log in with `{sandbox.DEMO_USERNAME}` / "
+                f"`{sandbox.DEMO_PASSWORD}` to explore a fully populated sample clinic. "
+                f"Anything you add there is wiped automatically every "
+                f"{sandbox.DEMO_TTL_MINUTES} minutes, and no real clinic's data is visible."
+            )
 
             if st.button("Login", use_container_width=True, key="login_btn"):
                 conn = db.get_db()
@@ -362,6 +374,17 @@ if not st.session_state["logged_in"]:
 # -----------------------------------------------------------------------------
 # 3. SIDEBAR NAVIGATION
 # -----------------------------------------------------------------------------
+# ---- Demo sandbox: expire anything older than an hour, then re-seed ----
+if sandbox.is_demo_center(st.session_state.get("center_id")):
+    if sandbox.refresh_if_expired(st.session_state["center_id"]):
+        st.toast("Demo data was refreshed — starting from a clean sample clinic.")
+    _demo_left = sandbox.minutes_left(st.session_state["center_id"])
+    st.warning(
+        f"🎭 **Demo Mode** — this is a sandbox clinic with sample data. Everything you add "
+        f"here is deleted automatically in about **{_demo_left} minute(s)**, and this "
+        f"account's password cannot be changed."
+    )
+
 st.sidebar.title("🏥 SN Clinic")
 center_label = db.get_center_name(st.session_state["center_id"]) if st.session_state["role"] != "superadmin" else "All Clinics"
 st.sidebar.write(f"**{st.session_state['full_name']}**")
@@ -424,6 +447,43 @@ for idx, item in enumerate(menu):
     )
 
 choice = st.session_state["nav_choice"]
+
+# ---- Change My Password (available to EVERY role, including Super Admin) ----
+st.sidebar.markdown("---")
+with st.sidebar.expander("🔑 Change My Password"):
+    _pw_conn = db.get_db()
+    _me = _pw_conn.execute(
+        "SELECT * FROM user WHERE id=?", (st.session_state.get("user_id"),)
+    ).fetchone()
+    if _me and _me["is_demo_account"]:
+        st.caption(
+            "🎭 This is the shared Demo Account — its password is permanently locked "
+            "so it can be handed out safely."
+        )
+        _pw_conn.close()
+    else:
+        with st.form("sidebar_change_pw", clear_on_submit=True):
+            _cur_pw = st.text_input("Current Password", type="password")
+            _np1 = st.text_input("New Password", type="password")
+            _np2 = st.text_input("Confirm New Password", type="password")
+            if st.form_submit_button("Update Password", use_container_width=True):
+                if not _me or not db.verify_password(_cur_pw, _me["password_hash"], _me["password_salt"]):
+                    st.error("Current password is incorrect.")
+                elif not _np1:
+                    st.error("Enter a new password.")
+                elif _np1 != _np2:
+                    st.error("New passwords do not match.")
+                elif len(_np1) < 6:
+                    st.error("Use at least 6 characters.")
+                else:
+                    _s, _h = db.make_password(_np1)
+                    _pw_conn.execute(
+                        "UPDATE user SET password_hash=?, password_salt=? WHERE id=?",
+                        (_h, _s, st.session_state.get("user_id")),
+                    )
+                    _pw_conn.commit()
+                    st.success("Password updated. Use it from your next login.")
+        _pw_conn.close()
 
 st.sidebar.markdown("---")
 with st.sidebar.container(key="navbtn_logout"):

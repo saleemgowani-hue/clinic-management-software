@@ -145,6 +145,8 @@ def init_db():
         plan TEXT DEFAULT 'Trial',
         plan_expiry TEXT,
         is_active INTEGER DEFAULT 1,
+        is_demo_center INTEGER DEFAULT 0,
+        demo_reset_at TEXT,
         created_at TEXT
     )""")
 
@@ -373,6 +375,8 @@ def init_db():
         "is_demo_account": "INTEGER DEFAULT 0",
     })
     _ensure_columns(c, "center", {
+        "is_demo_center": "INTEGER DEFAULT 0",
+        "demo_reset_at": "TEXT",
         "plan": "TEXT DEFAULT 'Trial'",
         "plan_expiry": "TEXT",
         "is_active": "INTEGER DEFAULT 1",
