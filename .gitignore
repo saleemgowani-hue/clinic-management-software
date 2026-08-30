@@ -1,0 +1,30 @@
+# --- Secrets: NEVER commit these ---
+.env
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# --- Local databases / data ---
+*.db
+*.sqlite
+*.sqlite3
+clinic.db
+backups/
+
+# --- Generated PDFs / exports ---
+*.pdf
+exports/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
