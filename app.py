@@ -7,6 +7,7 @@ staff, billing and appointment data stays isolated to that center, so this
 one app + database can be sold to many clinics at once.
 """
 
+import calendar
 import hashlib
 from datetime import date, datetime, timedelta
 
@@ -620,6 +621,77 @@ if choice == "Dashboard":
             st.info("No appointments scheduled for today.")
     except Exception:
         st.info("No appointments found.")
+
+    st.markdown("---")
+    st.markdown("<h3>📊 Key Performance Indicators (This Month vs Last Month)</h3>", unsafe_allow_html=True)
+
+    try:
+        kpi_scope_sql, kpi_scope_params = "", []
+        if not is_superadmin:
+            kpi_scope_sql = " AND center_id=?"
+            kpi_scope_params = [my_center_id]
+        elif selected_city != "All Cities":
+            kpi_scope_sql = " AND center_id IN (SELECT id FROM center WHERE city=?)"
+            kpi_scope_params = [selected_city]
+
+        cur_start = date.today().replace(day=1)
+        cur_end = date.today()
+        prev_last_day = cur_start - timedelta(days=1)
+        prev_month_days = calendar.monthrange(prev_last_day.year, prev_last_day.month)[1]
+        prev_start = prev_last_day.replace(day=1)
+        prev_end = prev_last_day.replace(day=min(cur_end.day, prev_month_days))
+
+        def kpi_sum(col, table, date_col, start, end):
+            row = conn.execute(
+                f"SELECT SUM({col}) FROM {table} WHERE DATE({date_col}) BETWEEN ? AND ?{kpi_scope_sql}",
+                [str(start), str(end)] + kpi_scope_params,
+            ).fetchone()
+            return row[0] or 0
+
+        def kpi_count(table, date_col, start, end, extra_sql=""):
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE DATE({date_col}) BETWEEN ? AND ?{kpi_scope_sql}{extra_sql}",
+                [str(start), str(end)] + kpi_scope_params,
+            ).fetchone()
+            return row[0] or 0
+
+        def pct_delta(cur, prev):
+            change = (cur - prev) / prev * 100 if prev else (100.0 if cur else 0.0)
+            arrow = "▲" if change >= 0 else "▼"
+            return change, f"{arrow} {abs(change):.1f}% vs last month"
+
+        cur_revenue = kpi_sum("total", "fee", "paid_on", cur_start, cur_end)
+        prev_revenue = kpi_sum("total", "fee", "paid_on", prev_start, prev_end)
+        cur_new_pat = kpi_count("patient", "created_at", cur_start, cur_end)
+        prev_new_pat = kpi_count("patient", "created_at", prev_start, prev_end)
+        cur_appts_total = kpi_count("appointment", "appt_date", cur_start, cur_end)
+        cur_appts_done = kpi_count("appointment", "appt_date", cur_start, cur_end, " AND status='Completed'")
+        cur_billed_patients = conn.execute(
+            f"SELECT COUNT(DISTINCT patient_id) FROM fee WHERE DATE(paid_on) BETWEEN ? AND ?{kpi_scope_sql}",
+            [str(cur_start), str(cur_end)] + kpi_scope_params,
+        ).fetchone()[0] or 0
+
+        rev_change, rev_delta_txt = pct_delta(cur_revenue, prev_revenue)
+        pat_change, pat_delta_txt = pct_delta(cur_new_pat, prev_new_pat)
+        completion_rate = (cur_appts_done / cur_appts_total * 100) if cur_appts_total else 0
+        avg_rev_per_patient = (cur_revenue / cur_billed_patients) if cur_billed_patients else 0
+
+        kc1, kc2, kc3, kc4 = st.columns(4)
+        colored_metric(kc1, "Revenue (This Month)", f"₹{cur_revenue:,.0f}",
+                        "#059669" if rev_change >= 0 else "#dc2626", rev_delta_txt, "💰")
+        colored_metric(kc2, "New Patients (This Month)", cur_new_pat,
+                        "#0284c7" if pat_change >= 0 else "#dc2626", pat_delta_txt, "🧑‍🤝‍🧑")
+        colored_metric(kc3, "Appointment Completion Rate", f"{completion_rate:.1f}%",
+                        "#7c3aed", f"{cur_appts_done}/{cur_appts_total} completed", "✅")
+        colored_metric(kc4, "Avg. Revenue / Patient", f"₹{avg_rev_per_patient:,.0f}",
+                        "#d97706", f"{cur_billed_patients} patients billed", "📈")
+        if "Reports & Analytics" in menu:
+            st.caption(
+                "For a detailed, date-range based KPI report with growth trends and CSV export, "
+                "see **Reports & Analytics → 📊 KPI Report**."
+            )
+    except Exception:
+        st.info("KPI data will appear here once billing and patient data is available.")
 
 # -----------------------------------------------------------------------------
 # MODULE: PATIENTS
@@ -1867,7 +1939,7 @@ elif choice == "Reports & Analytics":
 
     rep_tabs = st.tabs([
         "💰 Fees Collection", "🧑‍🤝‍🧑 Patients", "📅 Appointments",
-        "🗓️ Attendance", "💵 Salary", "🧾 Expenses",
+        "🗓️ Attendance", "💵 Salary", "🧾 Expenses", "📊 KPI Report",
     ])
 
     # ---- Fees Collection ----
@@ -2063,6 +2135,116 @@ elif choice == "Reports & Analytics":
             )
         else:
             st.info("No expenses recorded for this period yet.")
+
+    # ---- KPI Report ----
+    with rep_tabs[6]:
+        st.markdown(f"##### 📊 KPI Report ({start_d} to {end_d})")
+        st.caption("Compares the selected period against an equal-length immediately preceding period.")
+
+        period_days = (end_d - start_d).days + 1
+        prev_end_d = start_d - timedelta(days=1)
+        prev_start_d = prev_end_d - timedelta(days=period_days - 1)
+
+        def kpi_sum(col, table, date_col, start, end):
+            row = conn.execute(
+                f"SELECT SUM({col}) FROM {table} WHERE DATE({date_col}) BETWEEN ? AND ?{scope_sql}",
+                [str(start), str(end)] + scope_params,
+            ).fetchone()
+            return row[0] or 0
+
+        def kpi_count(table, date_col, start, end, extra_sql=""):
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE DATE({date_col}) BETWEEN ? AND ?{scope_sql}{extra_sql}",
+                [str(start), str(end)] + scope_params,
+            ).fetchone()
+            return row[0] or 0
+
+        def kpi_growth(cur, prev):
+            return (cur - prev) / prev * 100 if prev else (100.0 if cur else 0.0)
+
+        cur_revenue = kpi_sum("total", "fee", "paid_on", start_d, end_d)
+        prev_revenue = kpi_sum("total", "fee", "paid_on", prev_start_d, prev_end_d)
+
+        cur_new_pat = kpi_count("patient", "created_at", start_d, end_d)
+        prev_new_pat = kpi_count("patient", "created_at", prev_start_d, prev_end_d)
+
+        cur_appts_total = kpi_count("appointment", "appt_date", start_d, end_d)
+        prev_appts_total = kpi_count("appointment", "appt_date", prev_start_d, prev_end_d)
+        cur_appts_done = kpi_count("appointment", "appt_date", start_d, end_d, " AND status='Completed'")
+        cur_appts_cancel = kpi_count("appointment", "appt_date", start_d, end_d, " AND status IN ('Cancelled','No-Show')")
+
+        cur_expenses = kpi_sum("amount", "expense", "expense_date", start_d, end_d)
+        prev_expenses = kpi_sum("amount", "expense", "expense_date", prev_start_d, prev_end_d)
+
+        cur_billed_patients = conn.execute(
+            f"SELECT COUNT(DISTINCT patient_id) FROM fee WHERE DATE(paid_on) BETWEEN ? AND ?{scope_sql}",
+            [str(start_d), str(end_d)] + scope_params,
+        ).fetchone()[0] or 0
+
+        rev_growth = kpi_growth(cur_revenue, prev_revenue)
+        pat_growth = kpi_growth(cur_new_pat, prev_new_pat)
+        appt_growth = kpi_growth(cur_appts_total, prev_appts_total)
+        exp_growth = kpi_growth(cur_expenses, prev_expenses)
+        completion_rate = (cur_appts_done / cur_appts_total * 100) if cur_appts_total else 0
+        cancellation_rate = (cur_appts_cancel / cur_appts_total * 100) if cur_appts_total else 0
+        avg_rev_per_patient = (cur_revenue / cur_billed_patients) if cur_billed_patients else 0
+        avg_rev_per_appt = (cur_revenue / cur_appts_total) if cur_appts_total else 0
+        net_profit = cur_revenue - cur_expenses
+        prev_net_profit = prev_revenue - prev_expenses
+        profit_margin = (net_profit / cur_revenue * 100) if cur_revenue else 0
+
+        k1, k2, k3, k4 = st.columns(4)
+        colored_metric(k1, "Revenue Growth", f"{rev_growth:+.1f}%",
+                        "#059669" if rev_growth >= 0 else "#dc2626",
+                        f"₹{cur_revenue:,.0f} vs ₹{prev_revenue:,.0f}", "💰")
+        colored_metric(k2, "Patient Growth", f"{pat_growth:+.1f}%",
+                        "#0284c7" if pat_growth >= 0 else "#dc2626",
+                        f"{cur_new_pat} vs {prev_new_pat}", "🧑‍🤝‍🧑")
+        colored_metric(k3, "Appointment Growth", f"{appt_growth:+.1f}%",
+                        "#7c3aed" if appt_growth >= 0 else "#dc2626",
+                        f"{cur_appts_total} vs {prev_appts_total}", "📅")
+        colored_metric(k4, "Net Profit Margin", f"{profit_margin:.1f}%",
+                        "#0d9488" if net_profit >= 0 else "#dc2626",
+                        f"₹{net_profit:,.0f} net", "📈")
+
+        st.write("")
+        k5, k6, k7, k8 = st.columns(4)
+        colored_metric(k5, "Appt. Completion Rate", f"{completion_rate:.1f}%", "#059669",
+                        f"{cur_appts_done}/{cur_appts_total} completed", "✅")
+        colored_metric(k6, "Appt. Cancellation Rate", f"{cancellation_rate:.1f}%",
+                        "#dc2626" if cancellation_rate > 20 else "#d97706",
+                        f"{cur_appts_cancel} cancelled/no-show", "❌")
+        colored_metric(k7, "Avg. Revenue / Patient", f"₹{avg_rev_per_patient:,.0f}",
+                        "#d97706", f"{cur_billed_patients} patients billed", "🧾")
+        colored_metric(k8, "Avg. Revenue / Appointment", f"₹{avg_rev_per_appt:,.0f}", "#4f46e5", icon="📊")
+
+        st.markdown("---")
+        kpi_table = pd.DataFrame([
+            {"KPI": "Total Revenue (₹)", "Current Period": cur_revenue, "Previous Period": prev_revenue,
+             "Growth %": round(rev_growth, 1)},
+            {"KPI": "New Patients", "Current Period": cur_new_pat, "Previous Period": prev_new_pat,
+             "Growth %": round(pat_growth, 1)},
+            {"KPI": "Total Appointments", "Current Period": cur_appts_total, "Previous Period": prev_appts_total,
+             "Growth %": round(appt_growth, 1)},
+            {"KPI": "Total Expenses (₹)", "Current Period": cur_expenses, "Previous Period": prev_expenses,
+             "Growth %": round(exp_growth, 1)},
+            {"KPI": "Net Profit (₹)", "Current Period": net_profit, "Previous Period": prev_net_profit,
+             "Growth %": round(kpi_growth(net_profit, prev_net_profit), 1)},
+            {"KPI": "Appointment Completion Rate (%)", "Current Period": round(completion_rate, 1),
+             "Previous Period": "-", "Growth %": "-"},
+            {"KPI": "Appointment Cancellation/No-Show Rate (%)", "Current Period": round(cancellation_rate, 1),
+             "Previous Period": "-", "Growth %": "-"},
+            {"KPI": "Avg. Revenue per Patient (₹)", "Current Period": round(avg_rev_per_patient, 2),
+             "Previous Period": "-", "Growth %": "-"},
+            {"KPI": "Avg. Revenue per Appointment (₹)", "Current Period": round(avg_rev_per_appt, 2),
+             "Previous Period": "-", "Growth %": "-"},
+        ])
+        st.dataframe(kpi_table, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Download KPI Report as CSV", kpi_table.to_csv(index=False).encode("utf-8"),
+            file_name=f"kpi_report_{start_d}_to_{end_d}.csv", mime="text/csv",
+        )
+        st.caption(f"Previous period used for comparison: {prev_start_d} to {prev_end_d} ({period_days} day(s)).")
 
 # -----------------------------------------------------------------------------
 # MODULE: USERS MANAGEMENT
